@@ -98,6 +98,16 @@ fn fp(s: &str) -> Fingerprint {
     Fingerprint::new(s.to_string())
 }
 
+/// Pre-compute the strings the digest task ships through the channel.
+/// Tests against `BatchUpsertInput` need to feed the same shape the
+/// production handler does: a stringified event_id and a JSON payload.
+fn precomputed(ev: &Event) -> (String, String) {
+    (
+        ev.event_id.simple().to_string(),
+        serde_json::to_string(ev).expect("Event serializes"),
+    )
+}
+
 // ----- retention_settings -----
 
 #[tokio::test]
@@ -315,6 +325,8 @@ async fn upsert_batch_persists_two_distinct_fingerprints() {
     let now = Utc::now();
     let ev_a = sample_event("Boom", "v", "fa", 1);
     let ev_b = sample_event("Crash", "v", "fb", 2);
+    let (id_a, pl_a) = precomputed(&ev_a);
+    let (id_b, pl_b) = precomputed(&ev_b);
     let fp_a = fp("a");
     let fp_b = fp("b");
     let batch = vec![
@@ -325,7 +337,8 @@ async fn upsert_batch_persists_two_distinct_fingerprints() {
             culprit: None,
             level: None,
             now,
-            event: &ev_a,
+            event_id: &id_a,
+            payload: &pl_a,
         },
         BatchUpsertInput {
             project: "p",
@@ -334,7 +347,8 @@ async fn upsert_batch_persists_two_distinct_fingerprints() {
             culprit: None,
             level: None,
             now,
-            event: &ev_b,
+            event_id: &id_b,
+            payload: &pl_b,
         },
     ];
     let res = store.upsert_batch_with_events(&batch).await.unwrap();
@@ -361,6 +375,8 @@ async fn upsert_batch_dedupes_same_fingerprint_within_one_call() {
     let f = fp("dup");
     let ev1 = sample_event("Boom", "v1", "f", 1);
     let ev2 = sample_event("Boom", "v2", "f", 1);
+    let (id1, pl1) = precomputed(&ev1);
+    let (id2, pl2) = precomputed(&ev2);
     let batch = vec![
         BatchUpsertInput {
             project: "p",
@@ -369,7 +385,8 @@ async fn upsert_batch_dedupes_same_fingerprint_within_one_call() {
             culprit: None,
             level: None,
             now,
-            event: &ev1,
+            event_id: &id1,
+            payload: &pl1,
         },
         BatchUpsertInput {
             project: "p",
@@ -378,7 +395,8 @@ async fn upsert_batch_dedupes_same_fingerprint_within_one_call() {
             culprit: None,
             level: None,
             now,
-            event: &ev2,
+            event_id: &id2,
+            payload: &pl2,
         },
     ];
     let res = store.upsert_batch_with_events(&batch).await.unwrap();
@@ -407,6 +425,7 @@ async fn upsert_batch_flags_regression_for_resolved_issue() {
 
     // Now batch a fresh event for that fingerprint.
     let ev = sample_event("Boom", "v", "f", 1);
+    let (eid, pl) = precomputed(&ev);
     let batch = vec![BatchUpsertInput {
         project: "p",
         fp: &f,
@@ -414,7 +433,8 @@ async fn upsert_batch_flags_regression_for_resolved_issue() {
         culprit: None,
         level: None,
         now: Utc::now(),
-        event: &ev,
+        event_id: &eid,
+        payload: &pl,
     }];
     let res = store.upsert_batch_with_events(&batch).await.unwrap();
     assert!(!res[0].created);
@@ -429,6 +449,7 @@ async fn upsert_batch_dedupes_event_id_via_unique_constraint() {
     let (store, _dir) = fresh_store().await;
     let f = fp("uniq");
     let ev = sample_event("Boom", "v", "f", 1);
+    let (eid, pl) = precomputed(&ev);
     let batch1 = vec![BatchUpsertInput {
         project: "p",
         fp: &f,
@@ -436,7 +457,8 @@ async fn upsert_batch_dedupes_event_id_via_unique_constraint() {
         culprit: None,
         level: None,
         now: Utc::now(),
-        event: &ev,
+        event_id: &eid,
+        payload: &pl,
     }];
     store.upsert_batch_with_events(&batch1).await.unwrap();
     // Replay with the same event payload → ON CONFLICT silently no-ops the
@@ -449,7 +471,8 @@ async fn upsert_batch_dedupes_event_id_via_unique_constraint() {
         culprit: None,
         level: None,
         now: Utc::now(),
-        event: &ev,
+        event_id: &eid,
+        payload: &pl,
     }];
     store.upsert_batch_with_events(&batch2).await.unwrap();
 

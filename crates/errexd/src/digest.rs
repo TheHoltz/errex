@@ -27,14 +27,15 @@ const BATCH_SIZE: usize = 32;
 
 /// What the ingest layer hands to the digest task.
 ///
-/// Fingerprint, title, level, culprit are derived in the HTTP handler
-/// (see [`prepare`]) so the single-writer digest loop only does I/O.
-/// Stress-testing showed sync prep work was ~10% of digest's per-event
-/// budget; moving it off the hot loop lifts the throughput plateau.
+/// Everything that requires touching the raw `Event` (fingerprint,
+/// title, level, culprit, JSON serialization, event_id stringification)
+/// is precomputed in the HTTP handler via [`prepare`]. The digest task
+/// then only does SQLite I/O. Per-event JSON serialization showed up on
+/// the digest's hot path under saturation; moving it off the writer
+/// lifts the throughput plateau.
 #[derive(Debug, Clone)]
 pub struct IngestEvent {
     pub project: String,
-    pub event: Event,
     pub fingerprint: Fingerprint,
     pub title: String,
     pub level: Option<String>,
@@ -42,12 +43,17 @@ pub struct IngestEvent {
     pub exception_type: String,
     pub first_frame: String,
     pub received_at: DateTime<Utc>,
+    /// SDK event_id pre-stringified so the writer doesn't pay
+    /// `Uuid::to_string` per insert.
+    pub event_id: String,
+    /// Pre-serialized event JSON for the `events.payload` column.
+    pub payload: String,
 }
 
 /// Build a digest-ready record from a raw `Event` parsed off the wire.
-/// Cheap (small string allocs + one fingerprint hash); intentionally
-/// runs in the HTTP handler instead of the digest task so the digest's
-/// only blocking work is SQLite I/O.
+/// Cheap (small string allocs + one fingerprint hash + one JSON
+/// serialize); intentionally runs in the HTTP handler instead of the
+/// digest task so the digest's only blocking work is SQLite I/O.
 pub fn prepare(project: String, event: Event) -> IngestEvent {
     let fingerprint = fingerprint::derive(&event);
     let title = event.title();
@@ -77,9 +83,16 @@ pub fn prepare(project: String, event: Event) -> IngestEvent {
             format!("{func} in {file}")
         });
 
+    let event_id = event.event_id.simple().to_string();
+    // `serde_json::to_string` is infallible here — `Event` is a struct of
+    // strings/numbers/nested options, no map keys whose Display can
+    // fail. The `expect` documents the invariant rather than papering
+    // over a real error.
+    let payload =
+        serde_json::to_string(&event).expect("Event always serializes (no non-string map keys)");
+
     IngestEvent {
         project,
-        event,
         fingerprint,
         title,
         level,
@@ -87,6 +100,8 @@ pub fn prepare(project: String, event: Event) -> IngestEvent {
         exception_type,
         first_frame,
         received_at: Utc::now(),
+        event_id,
+        payload,
     }
 }
 
@@ -149,7 +164,8 @@ async fn process_batch(
             culprit: rec.culprit.as_deref(),
             level: rec.level.as_deref(),
             now: rec.received_at,
-            event: &rec.event,
+            event_id: &rec.event_id,
+            payload: &rec.payload,
         })
         .collect();
 

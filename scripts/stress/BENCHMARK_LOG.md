@@ -90,4 +90,23 @@ explicitly in the log entry before implementing.
   not a WAL checkpoint stall. Tail-latency optimization (hypothesis 3
   in the bank) is now low priority unless it resurfaces.
 
+### Iteration 1 — pre-serialize JSON + event_id in HTTP handler
+
+- **hypothesis (bank #1 + #4):** move `serde_json::to_string(event)` and
+  `Uuid::to_string` out of the digest's transaction. Ship pre-computed
+  `event_id` and `payload` strings on `IngestEvent`; `BatchUpsertInput`
+  borrows the strings, the writer just binds them.
+- **changed:** `crates/errexd/src/digest.rs`,
+  `crates/errexd/src/store.rs`, `crates/errexd/tests/store.rs`.
+- **bench:** `{"achieved_rps":3749.6,"p99_ms":5.32,"max_ms":11.36,"rss_max_mb":22.83,"errors":0,"efficiency_eps_per_mb":164.23}`
+- **delta vs baseline:** efficiency +1.0% (162.59 → 164.23). p99 -38%
+  (8.59 → 5.32 ms). max -40% (18.83 → 11.36 ms). RSS -1%.
+- **decision:** KEPT.
+- **notes:** Throughput at saturation barely moved — the JSON serialize
+  wasn't the throughput bottleneck. But it was clearly the
+  per-event-latency bottleneck: doing the serialize on whichever HTTP
+  worker thread is handling the request frees the single SQLite writer
+  to spend its time on I/O only. Saturation likely now bottlenecked on
+  raw SQLite write rate (next: hypothesis #2, multi-row INSERT).
+
 

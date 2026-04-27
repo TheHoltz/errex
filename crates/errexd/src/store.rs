@@ -136,6 +136,11 @@ pub struct RetentionSettings {
 
 /// One slot in a batched digest write. Borrows everything so the digest
 /// task can construct the slice without cloning under the hot loop.
+///
+/// `event_id` and `payload` are pre-computed by `digest::prepare()` (in
+/// the HTTP handler) so the single-writer transaction does no
+/// `serde_json::to_string` or `Uuid::to_string` work — both showed up
+/// on the digest's hot path under saturation.
 #[derive(Debug)]
 pub struct BatchUpsertInput<'a> {
     pub project: &'a str,
@@ -144,7 +149,8 @@ pub struct BatchUpsertInput<'a> {
     pub culprit: Option<&'a str>,
     pub level: Option<&'a str>,
     pub now: DateTime<Utc>,
-    pub event: &'a Event,
+    pub event_id: &'a str,
+    pub payload: &'a str,
 }
 
 /// Result of an upsert: the full `Issue` row as it stands after the write.
@@ -410,15 +416,16 @@ impl Store {
             .await?;
 
             // Append the raw event in the same tx so a partial commit can
-            // never leave an issue without its events.
-            let payload = serde_json::to_string(input.event)?;
+            // never leave an issue without its events. event_id + payload
+            // are pre-computed in digest::prepare so the single-writer
+            // transaction does no JSON serialization work.
             sqlx::query(
                 "INSERT INTO events (issue_id, event_id, payload) VALUES (?, ?, ?) \
                  ON CONFLICT(event_id) DO NOTHING",
             )
             .bind(row.id)
-            .bind(input.event.event_id.to_string())
-            .bind(payload)
+            .bind(input.event_id)
+            .bind(input.payload)
             .execute(&mut *tx)
             .await?;
 
