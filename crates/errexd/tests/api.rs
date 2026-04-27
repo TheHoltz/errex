@@ -1893,6 +1893,7 @@ async fn admin_revoke_user_sessions_returns_count() {
 
 use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
 async fn spawn_server(router: axum::Router) -> SocketAddr {
@@ -1917,9 +1918,22 @@ async fn next_text(
     }
 }
 
+/// Build a tungstenite client request with a Cookie header so the upgrade
+/// passes the daemon's auth check. Tests that exercise the no-auth path
+/// use the bare `connect_async(url)` form instead.
+fn ws_request_with_cookie(url: &str, cookie: &str) -> tokio_tungstenite::tungstenite::http::Request<()> {
+    let mut req = url.into_client_request().expect("valid ws url");
+    req.headers_mut().insert(
+        "cookie",
+        tokio_tungstenite::tungstenite::http::HeaderValue::from_str(cookie).unwrap(),
+    );
+    req
+}
+
 #[tokio::test]
 async fn ws_handshake_returns_hello_then_snapshot() {
     let (router, store, _dir) = fixture().await;
+    let cookie = signed_in_cookie(&store, store::Role::Viewer).await;
     store
         .upsert_issue(
             "alpha",
@@ -1934,7 +1948,8 @@ async fn ws_handshake_returns_hello_then_snapshot() {
 
     let addr = spawn_server(router).await;
     let url = format!("ws://{}/ws/alpha", addr);
-    let (mut ws, _resp) = tokio_tungstenite::connect_async(&url)
+    let req = ws_request_with_cookie(&url, &cookie);
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(req)
         .await
         .expect("upgrade");
 
@@ -1960,10 +1975,12 @@ async fn ws_ping_keepalive_does_not_close() {
     // Client-side Ping is documented as a no-op heartbeat. If the daemon
     // ever started replying with Close on unknown messages, the keepalive
     // would tear sockets down — pin it.
-    let (router, _store, _dir) = fixture().await;
+    let (router, store, _dir) = fixture().await;
+    let cookie = signed_in_cookie(&store, store::Role::Viewer).await;
     let addr = spawn_server(router).await;
     let url = format!("ws://{}/ws/alpha", addr);
-    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let req = ws_request_with_cookie(&url, &cookie);
+    let (mut ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
 
     let _hello = next_text(&mut ws).await;
     let _snap = next_text(&mut ws).await;
@@ -1977,6 +1994,54 @@ async fn ws_ping_keepalive_does_not_close() {
     ws.send(Message::Ping(vec![])).await.unwrap();
     let pong = ws.next().await.expect("pong").expect("ws ok");
     assert!(matches!(pong, Message::Pong(_)), "got {:?}", pong);
+}
+
+#[tokio::test]
+async fn ws_rejects_missing_cookie_with_401() {
+    // The fan-out used to be wide open: anyone with network reach could
+    // stream every issue (which contains stack traces / breadcrumbs that
+    // routinely leak secrets). Pin the auth gate.
+    let (router, _store, _dir) = fixture().await;
+    let addr = spawn_server(router).await;
+    let url = format!("ws://{}/ws/alpha", addr);
+    let result = tokio_tungstenite::connect_async(&url).await;
+    match result {
+        Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
+            assert_eq!(resp.status().as_u16(), 401);
+        }
+        other => panic!("expected 401 http error, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn ws_rejects_origin_mismatch_with_403() {
+    // A hostile page on `attacker.example.com` could otherwise connect with
+    // the user's cookie (cookies fly on cross-origin WS unless gated by
+    // SameSite — and even with SameSite=Strict, defense-in-depth pins origin
+    // explicitly). Reject when Origin is present and doesn't match the
+    // configured public_url.
+    let (router, store, _dir) = fixture().await;
+    let cookie = signed_in_cookie(&store, store::Role::Viewer).await;
+    let addr = spawn_server(router).await;
+    let url = format!("ws://{}/ws/alpha", addr);
+    let mut req = url.into_client_request().unwrap();
+    req.headers_mut().insert(
+        "cookie",
+        tokio_tungstenite::tungstenite::http::HeaderValue::from_str(&cookie).unwrap(),
+    );
+    req.headers_mut().insert(
+        "origin",
+        tokio_tungstenite::tungstenite::http::HeaderValue::from_static(
+            "http://attacker.example.com",
+        ),
+    );
+    let result = tokio_tungstenite::connect_async(req).await;
+    match result {
+        Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
+            assert_eq!(resp.status().as_u16(), 403);
+        }
+        other => panic!("expected 403 http error, got {:?}", other),
+    }
 }
 
 // ----- /health -----

@@ -19,7 +19,8 @@ use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
-use axum::response::Response;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use errex_proto::{ClientMessage, ServerMessage};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast;
@@ -33,11 +34,25 @@ use crate::store::Store;
 /// global and the SPA filters client-side, matching the previous server's
 /// behavior. Keeping the segment in the URL means SDKs and operators can
 /// already include it without a wire break later.
+///
+/// Authentication and origin pinning happen *before* `on_upgrade` so a
+/// rejected request never opens the websocket. The snapshot leaks every
+/// issue's title/culprit (and via the snapshot the SPA loads stack traces
+/// for any of them), so the gate has to run on every connection.
 pub async fn handle(
     upgrade: WebSocketUpgrade,
     Path(_project): Path<String>,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> Response {
+    if let Err(resp) = crate::auth::require_auth(&state, &headers).await {
+        return resp;
+    }
+    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
+        if !origin_allowed(origin, &state.public_url, state.dev_mode) {
+            return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
+        }
+    }
     let store = state.store.clone();
     let rx = state.fanout.subscribe();
     let metrics = state.metrics.clone();
@@ -46,6 +61,34 @@ pub async fn handle(
             tracing::debug!(%err, "ws connection closed");
         }
     })
+}
+
+/// Allow the connection iff the Origin header's `scheme://host[:port]` matches
+/// the configured `public_url`. In dev mode the Vite dev server origin is also
+/// permitted so `bun run dev` on :5173 can drive the daemon on :9090.
+///
+/// Browsers always send Origin for WS upgrades, so a missing Origin only
+/// happens for non-browser clients (CLIs, mobile SDKs) which are gated by
+/// the cookie alone. A *present* but mismatched Origin is the attack
+/// signature this rejects.
+fn origin_allowed(origin: &str, public_url: &str, dev_mode: bool) -> bool {
+    let normalize = |u: &str| -> Option<String> {
+        let u = u.trim_end_matches('/');
+        let scheme_end = u.find("://")?;
+        let after_scheme = &u[scheme_end + 3..];
+        let host_end = after_scheme.find('/').unwrap_or(after_scheme.len());
+        Some(format!("{}://{}", &u[..scheme_end], &after_scheme[..host_end]))
+    };
+    let Some(public_origin) = normalize(public_url) else {
+        return false;
+    };
+    if origin == public_origin {
+        return true;
+    }
+    if dev_mode && origin == "http://localhost:5173" {
+        return true;
+    }
+    false
 }
 
 async fn run(
@@ -105,4 +148,73 @@ async fn run(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origin_allowed_matches_public_url_exactly() {
+        assert!(origin_allowed(
+            "https://errex.example.com",
+            "https://errex.example.com",
+            false
+        ));
+        assert!(origin_allowed(
+            "https://errex.example.com",
+            "https://errex.example.com/",
+            false
+        ));
+    }
+
+    #[test]
+    fn origin_allowed_strips_path_from_public_url() {
+        assert!(origin_allowed(
+            "https://errex.example.com",
+            "https://errex.example.com/dashboard",
+            false
+        ));
+    }
+
+    #[test]
+    fn origin_rejected_on_host_mismatch() {
+        assert!(!origin_allowed(
+            "https://attacker.example.com",
+            "https://errex.example.com",
+            false
+        ));
+    }
+
+    #[test]
+    fn origin_rejected_on_scheme_mismatch() {
+        assert!(!origin_allowed(
+            "http://errex.example.com",
+            "https://errex.example.com",
+            false
+        ));
+    }
+
+    #[test]
+    fn origin_rejected_on_port_mismatch() {
+        assert!(!origin_allowed(
+            "http://errex.example.com:8080",
+            "http://errex.example.com:9090",
+            false
+        ));
+    }
+
+    #[test]
+    fn vite_dev_origin_allowed_only_in_dev_mode() {
+        assert!(origin_allowed(
+            "http://localhost:5173",
+            "http://localhost:9090",
+            true
+        ));
+        assert!(!origin_allowed(
+            "http://localhost:5173",
+            "http://localhost:9090",
+            false
+        ));
+    }
 }

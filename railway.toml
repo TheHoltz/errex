@@ -1,0 +1,23 @@
+# Railway deploy configuration. Tells Railway to build from
+# `docker/Dockerfile` (instead of guessing nixpacks against the Rust
+# workspace) and to use the daemon's built-in healthcheck.
+#
+# Required env vars on the Railway service:
+#   - ERREX_PUBLIC_URL     e.g. https://errex.yourdomain.com
+#   - ERREX_ADMIN_TOKEN    one-time setup wizard secret
+#
+# Auto-set by Railway, no operator action needed:
+#   - PORT                 the daemon picks this up via Config::resolved_http_port()
+#
+# Persistence: attach a Railway volume to `/data` so the SQLite file
+# survives container restarts and redeploys.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "docker/Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
