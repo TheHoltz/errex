@@ -2,7 +2,7 @@
 
 # errex
 
-**The lightweight, self-hosted Sentry alternative — one Rust binary, one SQLite file, ~10 MB RAM, fits on a $5 VPS.**
+**Lightweight, self-hosted Sentry alternative. Rust + SQLite, ~10 MB RAM.**
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=flat-square)](./LICENSE)
 [![Status](https://img.shields.io/badge/status-alpha-orange?style=flat-square)](#status)
