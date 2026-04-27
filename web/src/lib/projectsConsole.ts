@@ -75,11 +75,18 @@ export function buildTestEventCurl(
   opts: { eventId?: string; sentAt?: string } = {}
 ): string {
   const body = buildEnvelopeBody(opts).replace(/\n/g, '\\n');
+  // POSIX single-quote escape: project names allow apostrophes (e.g. "O'Brien"),
+  // and the daemon's DSN format embeds the name verbatim — without this, an
+  // apostrophe terminates the shell quoting and corrupts the request URL.
   return [
-    `curl -X POST '${dsn}' \\`,
+    `curl -X POST '${shellEscapeSingleQuoted(dsn)}' \\`,
     `  -H 'content-type: ${ENVELOPE_CONTENT_TYPE}' \\`,
     `  --data-binary $'${body}'`
   ].join('\n');
+}
+
+function shellEscapeSingleQuoted(value: string): string {
+  return value.replace(/'/g, "'\\''");
 }
 
 /** Validation for the inline rename input. Mirrors the daemon's accepted

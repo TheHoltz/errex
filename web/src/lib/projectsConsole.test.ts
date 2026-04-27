@@ -160,6 +160,18 @@ describe('buildTestEventCurl', () => {
     );
     expect(() => new Date(envHeader.sent_at).toISOString()).not.toThrow();
   });
+
+  it('escapes single quotes in the DSN so apostrophe-bearing project names do not break the shell quoting', () => {
+    // Project names may contain single quotes (e.g. "O'Brien"); the daemon
+    // embeds the name verbatim in the DSN, so without POSIX escaping the
+    // generated curl would be syntactically broken.
+    const dsn = "http://localhost:9090/api/O'Brien/envelope/?sentry_key=tok";
+    const cmd = buildTestEventCurl(dsn, FIXED);
+    // POSIX inside a single-quoted string: ' becomes '\''
+    expect(cmd).toContain("'http://localhost:9090/api/O'\\''Brien/envelope/?sentry_key=tok'");
+    // The naked apostrophe-flanked URL must NOT appear; that's the bug shape.
+    expect(cmd).not.toContain("'O'Brien");
+  });
 });
 
 describe('validateNewProjectName', () => {
