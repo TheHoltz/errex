@@ -117,6 +117,65 @@ it requires explicit user approval per the loop's hard rules. Until
 that approval lands, 421.72 is the achievable plateau on one CPU
 under the current architecture.
 
+## Phase 2 final summary
+
+**Reductions vs phase-2 baseline (post-iter-10 plateau):**
+
+| metric                  | before | after | Δ      |
+|-------------------------|-------:|------:|-------:|
+| idle_rss_mean_mb        |   9.75 |  6.91 | -29%   |
+| low_rss_mean_mb (100 RPS) | 13.09 |  9.50 | -27%   |
+| sat_rss_mean_mb         |  19.56 | 10.03 | -49%   |
+| sat_rss_max_mb          |  40.81 | 10.68 | -74%   |
+| sat_achieved_rps        |   7413 |  7489 | +1%    |
+| sat_p99_ms              |   8.47 |  2.02 | -76%   |
+| sat_max_ms              |  130.5 |  79.1 | -39%   |
+| stripped binary (MB)    |  11.0  |  6.04 | -45%   |
+| 0 errors                |    yes |   yes | —      |
+
+**Hosting interpretation (Railway-class instance):**
+
+- Idle floor sub-7 MB → comfortably fits in the smallest tier any
+  managed PaaS exposes. Most providers' "minimum" RAM is 256 MB; we
+  use ~3% of that at idle.
+- 100 RPS sustained sits at 9.5 MB — typical self-host load is 1–10
+  RPS, so headroom on the smallest instance is enormous.
+- Saturation (8000 RPS target, 7489 sustained, p99 2 ms) still costs
+  only 10 MB mean / 11 MB max RSS. Spike survival on a 256 MB plan
+  is trivial.
+
+**Levers that landed:**
+
+| iter | change                                  | direction                          |
+|---:|------------------------------------------|------------------------------------|
+| A1  | `tokio` `worker_threads = 2`            | -3% idle                           |
+| A2  | SQLite `synchronous=OFF`, `cache_size=-1024`, `mmap=16MB`  | -21% sat_rss   |
+| A3  | sqlx pool 4 → 2 connections             | -30% sat_p99                       |
+| A4  | release `panic = "abort"`               | -10% binary, -9% idle              |
+| A5  | drop unused `tower_http` features       | hygiene                            |
+| A6  | release `opt-level = "z"`, `lto = "fat"` | -33% binary, -15% idle            |
+| A7  | tokio `current_thread`                  | -14% low, -16% sat_rss             |
+| A10 | drop `tower` from prod deps             | hygiene                            |
+| A11 | drop reqwest `http2` feature            | -9% binary, -5% idle               |
+| A12 | SQLite `mmap_size = 0`                  | -9% sat_mean, -26% sat_max         |
+
+**Levers tried and reverted:**
+
+- A8 mimalloc allocator: +8% idle (mimalloc reserves arena upfront).
+- A9 glibc `MALLOC_*_THRESHOLD_` env tuning: +12% RSS (forcing
+  per-alloc mmap inflated bookkeeping).
+
+**Recommended next architectural steps (each requires user OK
+because it changes user-visible behavior or removes a feature):**
+
+1. Replace `reqwest` with hand-rolled `hyper` POST for webhooks.
+   Estimated -500 KB binary. Trade: more code + custom redirect
+   handling.
+2. Drop the MCP stub listener until the real implementation is on
+   deck. Saves a TCP listener task + future `mcp` module bytes.
+3. Consider switching from `clap` to a hand-rolled CLI parser.
+   ~50 KB binary saving, somewhat ugly DX.
+
 ## Phase 2 — minimum-RAM rework (Railway hosting target)
 
 After iter 10 plateau, rebooting the loop with a hosting-cost-aligned
