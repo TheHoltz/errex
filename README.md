@@ -2,7 +2,7 @@
 
 # errex
 
-**Self-hosted error tracking that runs in 7 MB of RAM. Sentry-SDK compatible. One binary.**
+**Self-hosted error tracking that runs in 7.5 MB of RAM — daemon + dashboard. Sentry-SDK compatible. One binary.**
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=flat-square)](./LICENSE)
 [![Status](https://img.shields.io/badge/status-alpha-orange?style=flat-square)](#status)
@@ -27,28 +27,29 @@ If you're an indie dev, a homelabber, or running a small product, this is probab
 
 ## Numbers (measured, not estimated)
 
-Single CPU, 30-second sustained workload, taskset-pinned, mean RSS:
+Single CPU, 30-second sustained workload, daemon `taskset -c 0`-pinned. **Idle is post-warmup** — every SPA asset (HTML + JS bundles + favicon) has been served at least once, so the dashboard is "loaded into memory" the way it would be after one operator opens it.
 
-| operating point          | achieved RPS | p99 ingest | RSS mean | RSS max |
-|--------------------------|-------------:|-----------:|---------:|--------:|
-| **idle** (no traffic)    |          —   |        —   | **6.91 MB** |  6.91 MB |
-| **typical** (100 RPS)    |          100 |     ~3 ms  | **9.5 MB** |  ~12 MB |
-| **saturation** (8000 target) |       7489 |    2.0 ms  | **10.0 MB** | 10.7 MB |
+| operating point              | achieved RPS | p99 ingest | RSS mean | RSS max |
+|------------------------------|-------------:|-----------:|---------:|--------:|
+| **idle** (daemon + SPA warm) |          —   |        —   | **7.5 MB** |  7.5 MB |
+| **typical** (100 RPS)        |          100 |     ~3 ms  | **9.9 MB** | ~10 MB |
+| **saturation** (8000 target) |         7478 |    2.5 ms  | **10.5 MB** | 11.1 MB |
 
-Stripped binary: **6.04 MB**. Zero ingest errors at every operating point. WebSocket fan-out is lossless to 64 subscribers under sustained load. Reproduce any of these with `scripts/stress/multibench.sh`.
+Stripped binary (daemon + embedded SPA + assets): **6.04 MB**. Zero ingest errors at every operating point. WebSocket fan-out is lossless to 64 subscribers under sustained load. Reproduce any of these with `scripts/stress/multibench.sh`.
 
 ### What this means for hosting cost
 
-- The smallest tier on Railway / Fly / Render / etc. is **256 MB**. errex uses **2.7%** of that at idle.
+- The smallest tier on Railway / Fly / Render / etc. is **256 MB**. errex uses **2.9%** of that at idle.
 - 100 RPS sustained leaves **96% of a 256 MB tier free** for your other workloads.
 - Spike to 8000 events/sec: still sub-12 MB. No tier upgrade needed.
+- Frontend is included — there's no second container, no nginx in front of static files, no extra service to provision.
 - Compare:
 
-| | min RAM | external deps | install |
-|---|---:|---|---|
-| **errex** | **~7 MB** | none | one binary |
-| GlitchTip | ~512 MB | Postgres + Redis | docker-compose |
-| Sentry self-host | ~4 GB | Postgres + Redis + Kafka + Snuba + Clickhouse | ~10 services |
+| | min RAM | external deps | services | install |
+|---|---:|---|---:|---|
+| **errex** | **~7.5 MB** | none | **1** | one binary |
+| GlitchTip | ~512 MB | Postgres + Redis | 3 | docker-compose |
+| Sentry self-host | ~4 GB | Postgres + Redis + Kafka + Snuba + Clickhouse | ~10 | full stack |
 
 > [!NOTE]
 > errex is **alpha**. The hot path (ingest → group → store → broadcast) is wired and tested end-to-end. Source maps and multi-tenant orgs aren't shipped yet — see [Status](#status).

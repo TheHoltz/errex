@@ -94,7 +94,20 @@ run_load() {
   rm -f "$out"
 }
 
-# 1. IDLE: 30 s of no traffic.
+# 0. WARM-UP: fault in SPA pages by simulating one full browser pageview.
+#    rust-embed stores the SPA inside the binary, but pages aren't
+#    resident until something requests them. A real operator opens the
+#    dashboard once on boot, so the realistic "idle floor" is post-SPA-
+#    warmup, not literal first-launch.
+WEB_BUILD="$ROOT/web/build"
+if [[ -d "$WEB_BUILD" ]]; then
+  while read -r path; do
+    rel="${path#$WEB_BUILD}"
+    curl -sf -o /dev/null "http://127.0.0.1:$PORT$rel" || true
+  done < <(find "$WEB_BUILD" -type f)
+fi
+
+# 1. IDLE: 30 s of no traffic, post-SPA-warmup.
 read -r idle_mean idle_min idle_max <<< "$(sample_rss 30)"
 
 # 2. LOW LOAD: 100 RPS for 30 s, RSS sampled by the harness itself.
