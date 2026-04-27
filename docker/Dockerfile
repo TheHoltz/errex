@@ -81,8 +81,8 @@ WORKDIR /home/errex
 VOLUME ["/data"]
 EXPOSE 9090 9091 9092
 
-ENV ERREXD_DATA_DIR=/data \
-    ERREXD_LOG_LEVEL=info
+ENV ERREX_DATA_DIR=/data \
+    ERREX_LOG_LEVEL=info
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD ["/usr/local/bin/errexd", "healthcheck"]

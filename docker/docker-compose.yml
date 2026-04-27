@@ -20,7 +20,20 @@ services:
     environment:
       ERREX_DATA_DIR: /data
       ERREX_LOG_LEVEL: info
-      ERREX_ADMIN_TOKEN: ${ERREX_ADMIN_TOKEN:-123}
+      # Container-only: bind on all interfaces so the docker port mapping
+      # above can reach the process. The daemon itself defaults to
+      # 127.0.0.1 — it is exposed publicly only because compose explicitly
+      # opts in here.
+      ERREX_HOST: 0.0.0.0
+      ERREX_MCP_HOST: 0.0.0.0
+      # Setup token MUST be supplied by the operator. We deliberately do
+      # NOT default to "123" — anyone who can reach the listener on a
+      # fresh deploy could otherwise hit /api/auth/setup with that value
+      # and become admin. Set it via your shell or a `.env` file:
+      #   ERREX_ADMIN_TOKEN=$(openssl rand -hex 32) docker compose up
+      # An empty value here disables the setup endpoint (503), which is
+      # safer than a guessable default.
+      ERREX_ADMIN_TOKEN: ${ERREX_ADMIN_TOKEN:-}
 
 volumes:
   errex-data:

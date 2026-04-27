@@ -12,8 +12,14 @@ pub struct Config {
     #[arg(long, env = "ERREX_DATA_DIR", default_value = "./data")]
     pub data_dir: PathBuf,
 
-    /// Bind address for the HTTP ingest server.
-    #[arg(long, env = "ERREX_HOST", default_value = "0.0.0.0")]
+    /// Bind address for the HTTP ingest server. Loopback by default so a
+    /// fresh `errexd` invocation is not reachable off-host until the
+    /// operator opts in to a public bind. Docker port mapping requires the
+    /// container's process to listen on `0.0.0.0`, so the supplied
+    /// docker-compose.yml sets `ERREX_HOST=0.0.0.0` explicitly — the change
+    /// is local-developer-friendly and prevents accidental public exposure
+    /// on bare metal.
+    #[arg(long, env = "ERREX_HOST", default_value = "127.0.0.1")]
     pub http_host: String,
 
     /// HTTP port. Reads from `ERREX_PORT` first, else falls back to
@@ -24,8 +30,12 @@ pub struct Config {
     #[arg(long, env = "ERREX_PORT")]
     pub http_port: Option<u16>,
 
-    /// Bind address for the MCP server (AI agents). Stub for now.
-    #[arg(long, env = "ERREX_MCP_HOST", default_value = "0.0.0.0")]
+    /// Bind address for the MCP server (AI agents). Loopback by default —
+    /// the MCP listener is currently a stub that drops every connection,
+    /// and a public bind here is gratuitous attack surface. Docker compose
+    /// sets `ERREX_MCP_HOST=0.0.0.0` only when the operator explicitly
+    /// wants the port exposed.
+    #[arg(long, env = "ERREX_MCP_HOST", default_value = "127.0.0.1")]
     pub mcp_host: String,
 
     #[arg(long, env = "ERREX_MCP_PORT", default_value_t = 9092)]
@@ -42,10 +52,12 @@ pub struct Config {
     pub dev_mode: bool,
 
     /// When true, the ingest endpoint requires a `sentry_key` matching the
-    /// configured project's token (see `errexd project add`). Off by default
-    /// — self-host pequeno typically runs behind a private network where
-    /// the daemon is unreachable from the public internet.
-    #[arg(long, env = "ERREX_REQUIRE_AUTH", default_value_t = false)]
+    /// configured project's token (see `errexd project add`). Defaults to
+    /// `true` so a fresh deploy is fail-closed — an operator who knows the
+    /// daemon sits behind a private network can opt out with
+    /// `ERREX_REQUIRE_AUTH=false`. Sentry SDKs always send `sentry_key`, so
+    /// this is the safe default for any internet-reachable bind.
+    #[arg(long, env = "ERREX_REQUIRE_AUTH", default_value_t = true)]
     pub require_auth: bool,
 
     /// Days of event payload retention. The daemon purges older events
@@ -159,5 +171,31 @@ mod tests {
         assert!(cfg.public_url_is_default());
         let cfg2 = Config::parse_from(["errexd", "--public-url", "https://errex.example.com"]);
         assert!(!cfg2.public_url_is_default());
+    }
+
+    /// Fail-closed default: a fresh daemon without explicit configuration
+    /// must not be reachable off-host. Operators in docker / on remote
+    /// hosts opt in to `0.0.0.0` deliberately — a public bind is never the
+    /// implicit behaviour.
+    #[test]
+    fn http_host_default_is_loopback() {
+        let cfg = Config::parse_from(["errexd"]);
+        assert_eq!(cfg.http_host, "127.0.0.1");
+    }
+
+    #[test]
+    fn mcp_host_default_is_loopback() {
+        let cfg = Config::parse_from(["errexd"]);
+        assert_eq!(cfg.mcp_host, "127.0.0.1");
+    }
+
+    /// Fail-closed default: ingest is auth-gated unless the operator
+    /// explicitly opts out. Without this, a public daemon would happily
+    /// accept anonymous events from anyone on the network and let an
+    /// attacker exhaust the digest budget.
+    #[test]
+    fn require_auth_default_is_true() {
+        let cfg = Config::parse_from(["errexd"]);
+        assert!(cfg.require_auth, "ingest must be auth-gated by default");
     }
 }

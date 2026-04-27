@@ -77,7 +77,11 @@ fn origin_allowed(origin: &str, public_url: &str, dev_mode: bool) -> bool {
         let scheme_end = u.find("://")?;
         let after_scheme = &u[scheme_end + 3..];
         let host_end = after_scheme.find('/').unwrap_or(after_scheme.len());
-        Some(format!("{}://{}", &u[..scheme_end], &after_scheme[..host_end]))
+        Some(format!(
+            "{}://{}",
+            &u[..scheme_end],
+            &after_scheme[..host_end]
+        ))
     };
     let Some(public_origin) = normalize(public_url) else {
         return false;

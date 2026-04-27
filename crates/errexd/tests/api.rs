@@ -1921,7 +1921,10 @@ async fn next_text(
 /// Build a tungstenite client request with a Cookie header so the upgrade
 /// passes the daemon's auth check. Tests that exercise the no-auth path
 /// use the bare `connect_async(url)` form instead.
-fn ws_request_with_cookie(url: &str, cookie: &str) -> tokio_tungstenite::tungstenite::http::Request<()> {
+fn ws_request_with_cookie(
+    url: &str,
+    cookie: &str,
+) -> tokio_tungstenite::tungstenite::http::Request<()> {
     let mut req = url.into_client_request().expect("valid ws url");
     req.headers_mut().insert(
         "cookie",

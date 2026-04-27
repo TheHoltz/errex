@@ -56,13 +56,27 @@ Stripped binary (daemon + embedded SPA + assets): **6.04 MB**. Zero ingest error
 
 ## Install
 
+The fastest path is the prebuilt container — multi-arch (amd64 + arm64), 6 MB stripped binary inside, no dependencies:
+
+```bash
+docker run -d --name errex \
+  -p 9090:9090 \
+  -v errex-data:/data \
+  -e ERREX_ADMIN_TOKEN="$(openssl rand -hex 16)" \
+  ghcr.io/theholtz/errex:latest
+```
+
+Open <http://localhost:9090/setup>, paste the admin token from the env, finish the wizard. Done.
+
+Or build from source:
+
 ```bash
 git clone https://github.com/TheHoltz/errex
 cd errex
 docker compose -f docker/docker-compose.yml up -d
 ```
 
-Open <http://localhost:9090>, finish the first-run setup wizard, and you're in. The full env / CLI reference is in [docs/CONFIGURATION.md](./docs/CONFIGURATION.md).
+The full env / CLI reference is in [docs/CONFIGURATION.md](./docs/CONFIGURATION.md).
 
 ## Custom domain (one env var)
 

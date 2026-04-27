@@ -1,0 +1,80 @@
+name: Build & publish container image
+
+# Publishes a container image so operators can `docker run` errex without
+# building from source — same UX Bugsink ships. Uses GitHub Container
+# Registry (ghcr.io) because it's free, requires no extra secrets
+# (GITHUB_TOKEN is provided automatically), and inherits repo
+# visibility (public repo → public image).
+#
+# Tags emitted per build:
+#   - `latest`            on every push to main
+#   - `<semver>` + minor  when a `v*` tag is pushed (e.g. v0.2.0 → 0.2.0,
+#                         0.2, latest)
+#   - `sha-<7chars>`      on every push (immutable, useful for pinning)
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        # Cross-arch emulation for the linux/arm64 leg. Native amd64 on
+        # the runner; arm64 emulated through QEMU.
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags + labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # Lowercases the image name (ghcr.io requires lowercase).
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build & push (linux/amd64, linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Cache layers across runs so the cargo-chef + rust-embed
+          # compile doesn't redo the world on every push.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
