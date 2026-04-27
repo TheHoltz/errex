@@ -52,10 +52,18 @@ use ingest::AppState;
 use store::Store;
 
 fn unique_tempdir() -> PathBuf {
+    // Atomic counter prevents same-nanosecond collisions across the ~140
+    // tests running in parallel in this binary. Two colliding paths would
+    // share a SQLite file and cause `UNIQUE constraint failed:
+    // _sqlx_migrations.version` on the second migrate.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let p = std::env::temp_dir().join(format!(
-        "errexd-api-{}-{}",
+        "errexd-api-{}-{}-{}",
         std::process::id(),
-        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        seq,
     ));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).expect("create tempdir");
@@ -290,6 +298,36 @@ async fn ingest_without_auth_required_accepts_anonymous_post() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn ingest_without_auth_bumps_project_last_used_at() {
+    // Telemetry: `last_used_at` powers the "no events yet" header in the SPA.
+    // It must update on every successful ingest, not just when auth is on.
+    let (router, store, _dir) = fixture_with_auth(false).await;
+    let p = store.create_project("p").await.unwrap();
+    assert!(
+        p.last_used_at.is_none(),
+        "fresh project starts with no last_used_at"
+    );
+
+    let res = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/p/envelope/")
+                .body(sample_envelope_body())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let after = store.project_by_name("p").await.unwrap().unwrap();
+    assert!(
+        after.last_used_at.is_some(),
+        "successful ingest must bump last_used_at even when require_auth is false",
+    );
 }
 
 #[tokio::test]

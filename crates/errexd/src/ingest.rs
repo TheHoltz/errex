@@ -747,9 +747,7 @@ async fn ingest_envelope(
             return (StatusCode::UNAUTHORIZED, "missing sentry_key").into_response();
         };
         match state.store.project_by_token(&key).await {
-            Ok(Some(p)) if p.name == project => {
-                state.store.touch_project_used(&p.name).await;
-            }
+            Ok(Some(p)) if p.name == project => {}
             Ok(_) => {
                 return (StatusCode::UNAUTHORIZED, "invalid sentry_key for project")
                     .into_response();
@@ -788,6 +786,8 @@ async fn ingest_envelope(
     if events.is_empty() {
         // Sentry SDKs send envelopes that contain only sessions or
         // transactions; that's not an error, just nothing for us yet.
+        // Still bump telemetry — SDK is alive even if it sent no events.
+        state.store.touch_project_used(&project).await;
         return StatusCode::OK.into_response();
     }
 
@@ -801,10 +801,16 @@ async fn ingest_envelope(
             .await
             .is_err()
         {
+            // Digest receiver gone = shutting down. Don't bump telemetry
+            // for a request we didn't actually accept.
             return (StatusCode::SERVICE_UNAVAILABLE, "shutting down").into_response();
         }
     }
 
+    // Telemetry: SPA's project header reads `last_used_at` for the "last
+    // event" line, so it must reflect SDK liveness regardless of whether
+    // ingest auth is enabled. Bump only after the envelope was accepted.
+    state.store.touch_project_used(&project).await;
     StatusCode::OK.into_response()
 }
 
