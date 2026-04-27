@@ -747,9 +747,7 @@ async fn ingest_envelope(
             return (StatusCode::UNAUTHORIZED, "missing sentry_key").into_response();
         };
         match state.store.project_by_token(&key).await {
-            Ok(Some(p)) if p.name == project => {
-                state.store.touch_project_used(&p.name).await;
-            }
+            Ok(Some(p)) if p.name == project => {}
             Ok(_) => {
                 return (StatusCode::UNAUTHORIZED, "invalid sentry_key for project")
                     .into_response();
@@ -784,6 +782,12 @@ async fn ingest_envelope(
             return (StatusCode::BAD_REQUEST, "invalid envelope").into_response();
         }
     };
+
+    // Telemetry: bump `last_used_at` for any successfully-parsed envelope,
+    // including session-only envelopes. The SPA reads this for the project
+    // header's "last event" line, so it must reflect SDK liveness regardless
+    // of whether ingest auth is enabled.
+    state.store.touch_project_used(&project).await;
 
     if events.is_empty() {
         // Sentry SDKs send envelopes that contain only sessions or

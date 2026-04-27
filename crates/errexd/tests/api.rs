@@ -293,6 +293,33 @@ async fn ingest_without_auth_required_accepts_anonymous_post() {
 }
 
 #[tokio::test]
+async fn ingest_without_auth_bumps_project_last_used_at() {
+    // Telemetry: `last_used_at` powers the "no events yet" header in the SPA.
+    // It must update on every successful ingest, not just when auth is on.
+    let (router, store, _dir) = fixture_with_auth(false).await;
+    let p = store.create_project("p").await.unwrap();
+    assert!(p.last_used_at.is_none(), "fresh project starts with no last_used_at");
+
+    let res = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/p/envelope/")
+                .body(sample_envelope_body())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let after = store.project_by_name("p").await.unwrap().unwrap();
+    assert!(
+        after.last_used_at.is_some(),
+        "successful ingest must bump last_used_at even when require_auth is false",
+    );
+}
+
+#[tokio::test]
 async fn ingest_with_auth_required_rejects_missing_token() {
     let (router, store, _dir) = fixture_with_auth(true).await;
     let _ = store.create_project("p").await.unwrap();
