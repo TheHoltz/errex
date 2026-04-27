@@ -3,6 +3,7 @@
     Ban,
     Bell,
     BellOff,
+    Bot,
     Check,
     Link as LinkIcon,
     SquareMousePointer,
@@ -11,6 +12,7 @@
     UserPlus
   } from 'lucide-svelte';
   import { actions } from '$lib/actions.svelte';
+  import { formatIssueContext } from '$lib/aiContext';
   import * as Avatar from '$lib/components/ui/avatar';
   import { Badge } from '$lib/components/ui/badge';
   import { Button } from '$lib/components/ui/button';
@@ -85,6 +87,18 @@
     );
   }
 
+  function onCopyAIContext() {
+    if (!issue) return;
+    const text = formatIssueContext(issue, selection.event);
+    navigator.clipboard?.writeText(text).then(
+      () =>
+        toast.success('AI context copied', {
+          description: `${text.length.toLocaleString()} chars — paste into Claude/ChatGPT`
+        }),
+      () => toast.error('Could not copy')
+    );
+  }
+
   const assigneeInitial = $derived(assignee ? assignee[0]!.toUpperCase() : '');
 </script>
 
@@ -150,6 +164,28 @@
             {#snippet child({ props })}
               <Button
                 {...props}
+                variant="default"
+                size="icon"
+                class="h-9 w-9"
+                aria-label="Copy AI context"
+                onclick={onCopyAIContext}
+                disabled={eventLoading}
+              >
+                <Bot class="h-4 w-4" />
+              </Button>
+            {/snippet}
+          </Tooltip.Trigger>
+          <Tooltip.Content>
+            Copy AI context
+            <kbd class="text-muted-foreground ml-1 font-mono text-[10px]">⌘⇧C</kbd>
+          </Tooltip.Content>
+        </Tooltip.Root>
+
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            {#snippet child({ props })}
+              <Button
+                {...props}
                 variant="ghost"
                 size="icon"
                 class="h-9 w-9"
@@ -178,31 +214,6 @@
                 variant="ghost"
                 size="icon"
                 class="h-9 w-9"
-                aria-label={issue.status === 'muted' ? 'Reactivate' : 'Mute'}
-                onclick={onMute}
-              >
-                {#if issue.status === 'muted'}
-                  <Bell class="h-4 w-4" />
-                {:else}
-                  <BellOff class="h-4 w-4" />
-                {/if}
-              </Button>
-            {/snippet}
-          </Tooltip.Trigger>
-          <Tooltip.Content>
-            {issue.status === 'muted' ? 'Reactivate' : 'Mute'}
-            <kbd class="text-muted-foreground ml-1 font-mono text-[10px]">M</kbd>
-          </Tooltip.Content>
-        </Tooltip.Root>
-
-        <Tooltip.Root>
-          <Tooltip.Trigger>
-            {#snippet child({ props })}
-              <Button
-                {...props}
-                variant="ghost"
-                size="icon"
-                class="h-9 w-9"
                 aria-label={assignee === actions.me ? 'Unassign' : 'Assign to me'}
                 onclick={onAssign}
               >
@@ -217,6 +228,33 @@
           <Tooltip.Content>
             {assignee === actions.me ? 'Unassign' : 'Assign to me'}
             <kbd class="text-muted-foreground ml-1 font-mono text-[10px]">A</kbd>
+          </Tooltip.Content>
+        </Tooltip.Root>
+
+        <Separator orientation="vertical" class="mx-1 h-6" />
+
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            {#snippet child({ props })}
+              <Button
+                {...props}
+                variant="ghost"
+                size="icon"
+                class="h-9 w-9"
+                aria-label={issue.status === 'muted' ? 'Reactivate' : 'Mute'}
+                onclick={onMute}
+              >
+                {#if issue.status === 'muted'}
+                  <Bell class="h-4 w-4" />
+                {:else}
+                  <BellOff class="h-4 w-4" />
+                {/if}
+              </Button>
+            {/snippet}
+          </Tooltip.Trigger>
+          <Tooltip.Content>
+            {issue.status === 'muted' ? 'Reactivate' : 'Mute'}
+            <kbd class="text-muted-foreground ml-1 font-mono text-[10px]">M</kbd>
           </Tooltip.Content>
         </Tooltip.Root>
 

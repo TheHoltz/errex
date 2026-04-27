@@ -22,7 +22,8 @@ export function normalize(stored: StoredEvent): NormalizedEvent {
     environment: p.environment ?? null,
     exception: extractStack(p),
     breadcrumbs: extractBreadcrumbs(p),
-    tags: extractTags(p)
+    tags: extractTags(p),
+    raw: stored
   };
 }
 

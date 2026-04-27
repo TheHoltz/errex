@@ -112,4 +112,8 @@ export interface NormalizedEvent {
   exception: Stack | null;
   breadcrumbs: Breadcrumb[];
   tags: Record<string, string>;
+  /** Untouched payload as returned by the daemon. Kept so consumers can
+   *  reach fields the normalized view-model intentionally drops (contexts,
+   *  user, request, message) — used by the AI-context exporter. */
+  raw: StoredEvent;
 }
