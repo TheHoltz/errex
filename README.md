@@ -2,7 +2,9 @@
 
 # errex
 
-**Self-hostable, Sentry-SDK-compatible error tracking — one binary, one SQLite file, fits on a $5 VPS.**
+**The lightweight, self-hosted Sentry alternative — one Rust binary, one SQLite file, ~10 MB RAM, fits on a $5 VPS.**
+
+<sub>Self-hosted error tracking · Sentry-SDK compatible ingest · Rust · SQLite · SvelteKit dashboard · MCP-ready for AI agents · Homelab-friendly · AGPL-3.0</sub>
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=flat-square)](./LICENSE)
 [![Status](https://img.shields.io/badge/status-alpha-orange?style=flat-square)](#status)
@@ -17,9 +19,13 @@
 
 ## About
 
-errex is a tiny error tracker for people who want their own error inbox without standing up Sentry's Postgres + Redis + Kafka stack. Drop any Sentry SDK into your app, point it at errex, and you get grouped exceptions, stack traces, occurrence counts, regression detection, and Slack/Discord/Teams alerts.
+errex is a tiny, **self-hostable error tracker** for people who want their own error inbox without standing up Sentry's Postgres + Redis + Kafka stack. Drop any **Sentry SDK** into your app, point it at errex, and you get grouped exceptions, stack traces, occurrence counts, regression detection, and Slack / Discord / Teams alerts.
 
-The whole thing is **one Rust binary** with the SvelteKit dashboard embedded. Persistence is a single **SQLite** file. RAM is around **10 MB at idle**. If you're an indie dev or a homelabber, this is probably what you wanted Sentry to be.
+The whole thing is **one Rust binary** with a fast **SvelteKit dashboard** embedded. Persistence is a single **SQLite** file (no Postgres, no Redis). RAM is around **10 MB at idle**. The ingest pipeline is single-writer with bounded buffers — backpressure, not unbounded queues.
+
+errex is also **MCP-ready**: an AI agent can plug straight into the daemon to triage issues, summarize stack traces, and resolve duplicates without touching the dashboard. (Stub today; the protocol surface is wired.)
+
+If you're an indie dev, a homelabber, or running a small product, this is probably what you wanted Sentry to be — **lightweight error monitoring** that fits on the same $5 VPS as your app.
 
 > [!NOTE]
 > errex is **alpha**. The hot path (ingest → group → store → broadcast) is wired and tested end-to-end. Source maps and multi-tenant orgs aren't shipped yet — see [Status](#status).
