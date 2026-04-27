@@ -245,3 +245,37 @@ describe('api auth client', () => {
     expect(init?.method).toBe('POST');
   });
 });
+
+describe('api.admin.retention', () => {
+  it('getRetention GETs /api/admin/retention', async () => {
+    const fetch = mockFetch({
+      ok: true,
+      json: { events_per_issue_max: 0, issues_per_project_max: 0, event_retention_days: 0 }
+    });
+    const s = await api.admin.getRetention();
+    expect(s.event_retention_days).toBe(0);
+    const [url] = fetch.mock.calls[0]!;
+    expect(url).toBe('/api/admin/retention');
+  });
+
+  it('setRetention PUTs the full payload', async () => {
+    const fetch = mockFetch({
+      ok: true,
+      json: { events_per_issue_max: 50, issues_per_project_max: 1000, event_retention_days: 7 }
+    });
+    const s = await api.admin.setRetention({
+      events_per_issue_max: 50,
+      issues_per_project_max: 1000,
+      event_retention_days: 7
+    });
+    expect(s.events_per_issue_max).toBe(50);
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe('/api/admin/retention');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(init?.body as string)).toEqual({
+      events_per_issue_max: 50,
+      issues_per_project_max: 1000,
+      event_retention_days: 7
+    });
+  });
+});

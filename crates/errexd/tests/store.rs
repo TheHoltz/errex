@@ -28,7 +28,7 @@ mod error;
 #[path = "../src/store.rs"]
 mod store;
 
-use store::{Role, Store};
+use store::{BatchUpsertInput, RetentionSettings, Role, Store};
 
 // ----- helpers -----
 
@@ -98,6 +98,368 @@ fn fp(s: &str) -> Fingerprint {
     Fingerprint::new(s.to_string())
 }
 
+// ----- retention_settings -----
+
+#[tokio::test]
+async fn retention_settings_default_is_unlimited() {
+    let (store, _dir) = fresh_store().await;
+    let s = store.get_retention_settings().await.unwrap();
+    assert_eq!(s.events_per_issue_max, 0);
+    assert_eq!(s.issues_per_project_max, 0);
+    assert_eq!(s.event_retention_days, 0);
+}
+
+#[tokio::test]
+async fn retention_settings_round_trip() {
+    let (store, _dir) = fresh_store().await;
+    let s = RetentionSettings {
+        events_per_issue_max: 50,
+        issues_per_project_max: 1000,
+        event_retention_days: 14,
+    };
+    store.set_retention_settings(s).await.unwrap();
+    let got = store.get_retention_settings().await.unwrap();
+    assert_eq!(got, s);
+}
+
+#[tokio::test]
+async fn retention_settings_set_is_idempotent() {
+    let (store, _dir) = fresh_store().await;
+    let s = RetentionSettings {
+        events_per_issue_max: 5,
+        issues_per_project_max: 5,
+        event_retention_days: 5,
+    };
+    store.set_retention_settings(s).await.unwrap();
+    store.set_retention_settings(s).await.unwrap();
+    let got = store.get_retention_settings().await.unwrap();
+    assert_eq!(got, s);
+    // Singleton: only one row.
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM retention_settings")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(count.0, 1);
+}
+
+#[tokio::test]
+async fn purge_excess_events_per_issue_keeps_newest_n() {
+    let (store, _dir) = fresh_store().await;
+    let f = fp("e");
+    let issue = store
+        .upsert_issue("p", &f, "T", None, None, Utc::now())
+        .await
+        .unwrap();
+    // Insert 10 distinct events for the same issue.
+    for i in 0..10 {
+        let mut ev = sample_event("Boom", "v", "f", i);
+        ev.event_id = Uuid::new_v4();
+        store.insert_event(issue.issue.id, &ev).await.unwrap();
+    }
+    let pre: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM events WHERE issue_id = ?")
+        .bind(issue.issue.id)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(pre.0, 10);
+
+    let deleted = store.purge_excess_events_per_issue(3).await.unwrap();
+    assert_eq!(deleted, 7);
+
+    let post: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM events WHERE issue_id = ?")
+        .bind(issue.issue.id)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(post.0, 3);
+}
+
+#[tokio::test]
+async fn purge_excess_events_per_issue_zero_is_noop() {
+    let (store, _dir) = fresh_store().await;
+    let f = fp("e");
+    let issue = store
+        .upsert_issue("p", &f, "T", None, None, Utc::now())
+        .await
+        .unwrap();
+    let mut ev = sample_event("Boom", "v", "f", 1);
+    ev.event_id = Uuid::new_v4();
+    store.insert_event(issue.issue.id, &ev).await.unwrap();
+    let deleted = store.purge_excess_events_per_issue(0).await.unwrap();
+    assert_eq!(deleted, 0);
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM events")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(count.0, 1);
+}
+
+#[tokio::test]
+async fn purge_excess_issues_per_project_drops_oldest() {
+    let (store, _dir) = fresh_store().await;
+    // Seed 5 issues with monotonically newer last_seen so ordering is
+    // deterministic.
+    let base = Utc::now() - Duration::seconds(100);
+    for i in 0..5 {
+        store
+            .upsert_issue(
+                "p",
+                &fp(&format!("f{i}")),
+                "T",
+                None,
+                None,
+                base + Duration::seconds(i),
+            )
+            .await
+            .unwrap();
+    }
+    let pre: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project = 'p'")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(pre.0, 5);
+
+    let deleted = store.purge_excess_issues_per_project(2).await.unwrap();
+    assert_eq!(deleted, 3);
+
+    // The two newest fingerprints must survive (f4, f3).
+    let surviving: Vec<(String,)> = sqlx::query_as(
+        "SELECT fingerprint FROM issues WHERE project = 'p' ORDER BY last_seen DESC",
+    )
+    .fetch_all(store.pool())
+    .await
+    .unwrap();
+    let names: Vec<String> = surviving.into_iter().map(|(s,)| s).collect();
+    assert_eq!(names, vec!["f4".to_string(), "f3".to_string()]);
+}
+
+#[tokio::test]
+async fn purge_excess_issues_per_project_cascades_events() {
+    // Deleting an issue must cascade to its events via the FK in init.sql.
+    // If a future migration ever drops ON DELETE CASCADE, this test will
+    // fail loudly.
+    let (store, _dir) = fresh_store().await;
+    let base = Utc::now() - Duration::seconds(100);
+    for i in 0..3 {
+        let r = store
+            .upsert_issue(
+                "p",
+                &fp(&format!("f{i}")),
+                "T",
+                None,
+                None,
+                base + Duration::seconds(i),
+            )
+            .await
+            .unwrap();
+        let mut ev = sample_event("Boom", "v", "f", i as u32);
+        ev.event_id = Uuid::new_v4();
+        store.insert_event(r.issue.id, &ev).await.unwrap();
+    }
+    let pre_events: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM events")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(pre_events.0, 3);
+
+    let deleted = store.purge_excess_issues_per_project(1).await.unwrap();
+    assert_eq!(deleted, 2);
+
+    let post_events: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM events")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(post_events.0, 1, "events for purged issues must cascade");
+}
+
+#[tokio::test]
+async fn purge_excess_isolates_per_project() {
+    // Two projects, three issues each. Cap is per-project, so both
+    // projects keep their newest 2.
+    let (store, _dir) = fresh_store().await;
+    let base = Utc::now() - Duration::seconds(100);
+    for proj in ["p1", "p2"] {
+        for i in 0..3 {
+            store
+                .upsert_issue(
+                    proj,
+                    &fp(&format!("{proj}-f{i}")),
+                    "T",
+                    None,
+                    None,
+                    base + Duration::seconds(i),
+                )
+                .await
+                .unwrap();
+        }
+    }
+    let deleted = store.purge_excess_issues_per_project(2).await.unwrap();
+    assert_eq!(deleted, 2);
+    let count_p1: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project = 'p1'")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    let count_p2: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project = 'p2'")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(count_p1.0, 2);
+    assert_eq!(count_p2.0, 2);
+}
+
+// ----- upsert_batch_with_events -----
+
+#[tokio::test]
+async fn upsert_batch_persists_two_distinct_fingerprints() {
+    let (store, _dir) = fresh_store().await;
+    let now = Utc::now();
+    let ev_a = sample_event("Boom", "v", "fa", 1);
+    let ev_b = sample_event("Crash", "v", "fb", 2);
+    let fp_a = fp("a");
+    let fp_b = fp("b");
+    let batch = vec![
+        BatchUpsertInput {
+            project: "p",
+            fp: &fp_a,
+            title: "T1",
+            culprit: None,
+            level: None,
+            now,
+            event: &ev_a,
+        },
+        BatchUpsertInput {
+            project: "p",
+            fp: &fp_b,
+            title: "T2",
+            culprit: None,
+            level: None,
+            now,
+            event: &ev_b,
+        },
+    ];
+    let res = store.upsert_batch_with_events(&batch).await.unwrap();
+    assert_eq!(res.len(), 2);
+    assert!(res[0].created);
+    assert!(res[1].created);
+    assert_ne!(res[0].issue.id, res[1].issue.id);
+
+    // Both event rows persisted (single transaction).
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM events")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(count.0, 2);
+}
+
+#[tokio::test]
+async fn upsert_batch_dedupes_same_fingerprint_within_one_call() {
+    // Two events with the same fingerprint in one batch must produce one
+    // issue with event_count=2. The first slot's INSERT wins; the second
+    // slot's UPDATE bumps the counter.
+    let (store, _dir) = fresh_store().await;
+    let now = Utc::now();
+    let f = fp("dup");
+    let ev1 = sample_event("Boom", "v1", "f", 1);
+    let ev2 = sample_event("Boom", "v2", "f", 1);
+    let batch = vec![
+        BatchUpsertInput {
+            project: "p",
+            fp: &f,
+            title: "T",
+            culprit: None,
+            level: None,
+            now,
+            event: &ev1,
+        },
+        BatchUpsertInput {
+            project: "p",
+            fp: &f,
+            title: "T",
+            culprit: None,
+            level: None,
+            now,
+            event: &ev2,
+        },
+    ];
+    let res = store.upsert_batch_with_events(&batch).await.unwrap();
+    assert!(res[0].created);
+    assert!(!res[1].created);
+    assert_eq!(res[0].issue.id, res[1].issue.id);
+    assert_eq!(res[1].issue.event_count, 2);
+}
+
+#[tokio::test]
+async fn upsert_batch_flags_regression_for_resolved_issue() {
+    // A new event arriving for a resolved issue must flip it back to
+    // unresolved and surface `regressed=true` so callers can fire alerts.
+    let (store, _dir) = fresh_store().await;
+    let f = fp("reg");
+
+    // Seed a resolved issue.
+    let initial = store
+        .upsert_issue("p", &f, "T", None, None, Utc::now())
+        .await
+        .unwrap();
+    store
+        .set_status(initial.issue.id, IssueStatus::Resolved)
+        .await
+        .unwrap();
+
+    // Now batch a fresh event for that fingerprint.
+    let ev = sample_event("Boom", "v", "f", 1);
+    let batch = vec![BatchUpsertInput {
+        project: "p",
+        fp: &f,
+        title: "T",
+        culprit: None,
+        level: None,
+        now: Utc::now(),
+        event: &ev,
+    }];
+    let res = store.upsert_batch_with_events(&batch).await.unwrap();
+    assert!(!res[0].created);
+    assert!(res[0].regressed);
+    assert_eq!(res[0].issue.status, IssueStatus::Unresolved);
+}
+
+#[tokio::test]
+async fn upsert_batch_dedupes_event_id_via_unique_constraint() {
+    // Same event_id replayed in a second batch must not double-count
+    // (Sentry SDKs retry, we rely on the events.event_id UNIQUE index).
+    let (store, _dir) = fresh_store().await;
+    let f = fp("uniq");
+    let ev = sample_event("Boom", "v", "f", 1);
+    let batch1 = vec![BatchUpsertInput {
+        project: "p",
+        fp: &f,
+        title: "T",
+        culprit: None,
+        level: None,
+        now: Utc::now(),
+        event: &ev,
+    }];
+    store.upsert_batch_with_events(&batch1).await.unwrap();
+    // Replay with the same event payload → ON CONFLICT silently no-ops the
+    // event insert. The issue's count still bumps because that's a
+    // different code path.
+    let batch2 = vec![BatchUpsertInput {
+        project: "p",
+        fp: &f,
+        title: "T",
+        culprit: None,
+        level: None,
+        now: Utc::now(),
+        event: &ev,
+    }];
+    store.upsert_batch_with_events(&batch2).await.unwrap();
+
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM events")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(row.0, 1, "duplicate event_id must not double-insert");
+}
+
 // ----- open / migrate -----
 
 #[tokio::test]
@@ -118,6 +480,39 @@ async fn migrate_creates_events_table() {
         .await
         .expect("query events");
     assert_eq!(row.0, 0);
+}
+
+#[tokio::test]
+async fn open_applies_perf_pragmas() {
+    // Pin the perf-tuning pragmas added after stress-testing surfaced
+    // tail-latency stalls under WAL checkpoint contention. A future
+    // refactor that drops them must trip a red bar.
+    let (store, _dir) = fresh_store().await;
+
+    let busy: (i64,) = sqlx::query_as("PRAGMA busy_timeout")
+        .fetch_one(store.pool())
+        .await
+        .expect("read busy_timeout");
+    assert_eq!(busy.0, 5000, "busy_timeout should be 5000ms");
+
+    let auto: (i64,) = sqlx::query_as("PRAGMA wal_autocheckpoint")
+        .fetch_one(store.pool())
+        .await
+        .expect("read wal_autocheckpoint");
+    assert_eq!(auto.0, 1000, "wal_autocheckpoint should be 1000 pages");
+
+    let mmap: (i64,) = sqlx::query_as("PRAGMA mmap_size")
+        .fetch_one(store.pool())
+        .await
+        .expect("read mmap_size");
+    assert!(mmap.0 >= 268_435_456, "mmap_size should be ≥ 256 MB");
+
+    let temp: (i64,) = sqlx::query_as("PRAGMA temp_store")
+        .fetch_one(store.pool())
+        .await
+        .expect("read temp_store");
+    // 0 = default, 1 = file, 2 = memory.
+    assert_eq!(temp.0, 2, "temp_store should be MEMORY");
 }
 
 #[tokio::test]

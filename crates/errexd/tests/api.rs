@@ -37,6 +37,8 @@ mod fingerprint;
 mod ingest;
 #[path = "../src/lockout.rs"]
 mod lockout;
+#[path = "../src/metrics.rs"]
+mod metrics;
 #[path = "../src/rate_limit.rs"]
 mod rate_limit;
 #[path = "../src/spa.rs"]
@@ -98,6 +100,7 @@ async fn fixture_full(
 
     let (tx, rx) = mpsc::channel(16);
     let (fanout_tx, _fanout_rx) = tokio::sync::broadcast::channel(8);
+    let (webhook_tx, _webhook_rx) = mpsc::channel(8);
     let state = Arc::new(AppState {
         events: tx,
         store: store.clone(),
@@ -113,6 +116,9 @@ async fn fixture_full(
         // through a real browser; dev_mode keeps the cookie attribute set
         // simple so the helper-based assertion is stable.
         dev_mode: true,
+        metrics: Arc::new(metrics::Metrics::new()),
+        webhook_capacity: 8,
+        webhook_sender: webhook_tx,
     });
     let router = ingest::build_router(state);
     tokio::spawn(async move {
@@ -125,6 +131,125 @@ async fn fixture_full(
 async fn body_json(resp: axum::response::Response) -> Value {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap()
+}
+
+// ----- /metrics -----
+
+#[tokio::test]
+async fn metrics_returns_expected_shape() {
+    let (router, _store, _dir) = fixture().await;
+    let res = router
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    assert_eq!(v["events_accepted"].as_u64(), Some(0));
+    assert_eq!(v["events_rejected_rate_limit"].as_u64(), Some(0));
+    assert_eq!(v["ws_lagged_total"].as_u64(), Some(0));
+    assert_eq!(v["ingest_channel"]["capacity"].as_u64(), Some(16));
+    assert_eq!(v["ingest_channel"]["depth"].as_u64(), Some(0));
+    assert_eq!(v["webhook_channel"]["capacity"].as_u64(), Some(8));
+    assert!(v["fanout"]["subscribers"].is_u64());
+}
+
+#[tokio::test]
+async fn metrics_events_accepted_increments_after_ingest() {
+    let (router, _store, _dir) = fixture().await;
+    // Pre-condition: zero accepted.
+    let v0 = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(v0["events_accepted"].as_u64(), Some(0));
+
+    // POST one envelope containing one event.
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/p/envelope/")
+                .body(sample_envelope_body())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let v1 = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(v1["events_accepted"].as_u64(), Some(1));
+}
+
+#[tokio::test]
+async fn metrics_rate_limit_rejection_counted() {
+    // 1/min refill, burst 1 ⇒ first request consumes the only token, the
+    // second is rejected within the same second.
+    let (router, _store, _dir) = fixture_with_rate_limit(1, 1).await;
+    // First request consumes the only token.
+    let _ = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/p/envelope/")
+                .body(sample_envelope_body())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Second request → 429 + counter bump.
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/p/envelope/")
+                .body(sample_envelope_body())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let v = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(v["events_rejected_rate_limit"].as_u64(), Some(1));
 }
 
 // ----- /api/projects -----
@@ -650,6 +775,67 @@ async fn admin_create_project_rejects_empty_name() {
     )
     .await;
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+// ----- /api/admin/retention -----
+
+#[tokio::test]
+async fn admin_get_retention_returns_defaults_unconfigured() {
+    let (router, store, _dir) = fixture_with_admin(ADMIN_TOKEN).await;
+    let cookie = admin_cookie(&store).await;
+    let res = admin_get(&router, "/api/admin/retention", Some(&cookie)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    assert_eq!(v["events_per_issue_max"].as_i64(), Some(0));
+    assert_eq!(v["issues_per_project_max"].as_i64(), Some(0));
+    assert_eq!(v["event_retention_days"].as_i64(), Some(0));
+}
+
+#[tokio::test]
+async fn admin_put_retention_persists_and_round_trips() {
+    let (router, store, _dir) = fixture_with_admin(ADMIN_TOKEN).await;
+    let cookie = admin_cookie(&store).await;
+    let res = admin_send(
+        &router,
+        "PUT",
+        "/api/admin/retention",
+        Some(&cookie),
+        r#"{"events_per_issue_max":50,"issues_per_project_max":1000,"event_retention_days":7}"#,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    assert_eq!(v["events_per_issue_max"].as_i64(), Some(50));
+    assert_eq!(v["issues_per_project_max"].as_i64(), Some(1000));
+    assert_eq!(v["event_retention_days"].as_i64(), Some(7));
+
+    // Persisted: GET reflects the change.
+    let res2 = admin_get(&router, "/api/admin/retention", Some(&cookie)).await;
+    let v2 = body_json(res2).await;
+    assert_eq!(v2["event_retention_days"].as_i64(), Some(7));
+}
+
+#[tokio::test]
+async fn admin_put_retention_rejects_negative_values() {
+    let (router, store, _dir) = fixture_with_admin(ADMIN_TOKEN).await;
+    let cookie = admin_cookie(&store).await;
+    let res = admin_send(
+        &router,
+        "PUT",
+        "/api/admin/retention",
+        Some(&cookie),
+        r#"{"events_per_issue_max":-1,"issues_per_project_max":0,"event_retention_days":0}"#,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn admin_get_retention_requires_admin() {
+    let (router, store, _dir) = fixture_with_admin(ADMIN_TOKEN).await;
+    let viewer_cookie = signed_in_cookie(&store, store::Role::Viewer).await;
+    let res = admin_get(&router, "/api/admin/retention", Some(&viewer_cookie)).await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

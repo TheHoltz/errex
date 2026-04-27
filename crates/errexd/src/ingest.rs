@@ -29,6 +29,7 @@ use tower_http::cors::CorsLayer;
 
 use crate::digest::IngestEvent;
 use crate::error::DaemonError;
+use crate::metrics::Metrics;
 use crate::rate_limit::RateLimiter;
 use crate::spa;
 use crate::store::Store;
@@ -61,6 +62,15 @@ pub struct AppState {
     /// localhost are accepted by browsers (which refuse `Secure` over
     /// non-https).
     pub dev_mode: bool,
+    /// Process-lifetime counters surfaced via `/metrics`.
+    pub metrics: Arc<Metrics>,
+    /// Capacity of the webhook channel, surfaced through `/metrics` so
+    /// operators can see when alert delivery is being dropped on a hot
+    /// loop (`try_send` returns Full).
+    pub webhook_capacity: usize,
+    /// Live handle to the webhook sender so `/metrics` can report depth
+    /// without an extra plumbed counter. Not used to send.
+    pub webhook_sender: tokio::sync::mpsc::Sender<crate::webhook::Trigger>,
 }
 
 /// Build the API router without binding a listener. Extracted so tests can
@@ -68,6 +78,7 @@ pub struct AppState {
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics))
         .route("/api/:project/envelope/", post(ingest_envelope))
         .route("/api/projects", get(list_projects))
         .route("/api/issues", get(list_issues))
@@ -83,6 +94,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/auth/logout", post(crate::auth::handle_logout))
         .route("/api/auth/me", get(crate::auth::handle_me))
         // ----- admin -----
+        .route(
+            "/api/admin/retention",
+            get(admin_get_retention).put(admin_put_retention),
+        )
         .route(
             "/api/admin/projects",
             get(admin_list_projects).post(admin_create_project),
@@ -168,6 +183,33 @@ pub async fn serve(addr: SocketAddr, state: Arc<AppState>) -> Result<(), DaemonE
 
 async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
+}
+
+/// Operator-facing metrics. Static fields (channel capacities) are read
+/// once; dynamic ones (queue depth, subscriber count, RSS) are sampled
+/// on each scrape. Cheap enough to allow Prometheus-style scraping every
+/// few seconds without measurable overhead — the I/O cost is one
+/// `/proc/self/status` read.
+async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let snap = state.metrics.snapshot();
+    let body = json!({
+        "events_accepted": snap.events_accepted,
+        "events_rejected_rate_limit": snap.events_rejected_rate_limit,
+        "ws_lagged_total": snap.ws_lagged_total,
+        "ingest_channel": {
+            "capacity": state.events.max_capacity(),
+            "depth": state.events.max_capacity().saturating_sub(state.events.capacity()),
+        },
+        "webhook_channel": {
+            "capacity": state.webhook_capacity,
+            "depth": state.webhook_capacity.saturating_sub(state.webhook_sender.capacity()),
+        },
+        "fanout": {
+            "subscribers": state.fanout.receiver_count(),
+        },
+        "rss_kb": crate::metrics::read_rss_kb(),
+    });
+    Json(body)
 }
 
 async fn list_projects(
@@ -302,6 +344,53 @@ impl AdminProjectView {
 #[allow(clippy::result_large_err)]
 async fn check_admin(state: &AppState, headers: &axum::http::HeaderMap) -> Result<(), Response> {
     crate::auth::require_admin(state, headers).await.map(|_| ())
+}
+
+async fn admin_get_retention(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    let s = state.store.get_retention_settings().await?;
+    Ok(Json(s).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct RetentionBody {
+    events_per_issue_max: i64,
+    issues_per_project_max: i64,
+    event_retention_days: i64,
+}
+
+async fn admin_put_retention(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: Option<Json<RetentionBody>>,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    let Some(Json(body)) = body else {
+        return Ok((StatusCode::BAD_REQUEST, "missing body").into_response());
+    };
+    // Reject negatives so a UI bug can't accidentally send -1 and have
+    // the row store an unrepresentable cap. 0 (= unlimited) is the only
+    // permitted off switch.
+    if body.events_per_issue_max < 0
+        || body.issues_per_project_max < 0
+        || body.event_retention_days < 0
+    {
+        return Ok((StatusCode::BAD_REQUEST, "values must be >= 0").into_response());
+    }
+    let s = crate::store::RetentionSettings {
+        events_per_issue_max: body.events_per_issue_max,
+        issues_per_project_max: body.issues_per_project_max,
+        event_retention_days: body.event_retention_days,
+    };
+    state.store.set_retention_settings(s).await?;
+    Ok(Json(s).into_response())
 }
 
 async fn admin_list_projects(
@@ -765,6 +854,7 @@ async fn ingest_envelope(
         .rate_limiter
         .check(&project, std::time::Instant::now())
     {
+        state.metrics.inc_rejected_rate_limit();
         return (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
     }
     let raw = match maybe_gunzip(&body) {
@@ -792,19 +882,13 @@ async fn ingest_envelope(
     }
 
     for event in events {
-        if state
-            .events
-            .send(IngestEvent {
-                project: project.clone(),
-                event,
-            })
-            .await
-            .is_err()
-        {
+        let rec = crate::digest::prepare(project.clone(), event);
+        if state.events.send(rec).await.is_err() {
             // Digest receiver gone = shutting down. Don't bump telemetry
             // for a request we didn't actually accept.
             return (StatusCode::SERVICE_UNAVAILABLE, "shutting down").into_response();
         }
+        state.metrics.inc_accepted();
     }
 
     // Telemetry: SPA's project header reads `last_used_at` for the "last

@@ -120,6 +120,33 @@ pub struct Store {
     pool: SqlitePool,
 }
 
+/// Operator-configurable retention bounds. Defaults are 0 = "unlimited"
+/// so a fresh DB matches pre-feature behavior. The retention task reads
+/// these every tick, so a UI change takes effect on the next purge run.
+///
+/// `event_retention_days` of 0 means "fall back to the boot config flag"
+/// (`ERREXD_RETENTION_DAYS`). Storing the override separately lets an
+/// operator tighten retention via the SPA without a redeploy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetentionSettings {
+    pub events_per_issue_max: i64,
+    pub issues_per_project_max: i64,
+    pub event_retention_days: i64,
+}
+
+/// One slot in a batched digest write. Borrows everything so the digest
+/// task can construct the slice without cloning under the hot loop.
+#[derive(Debug)]
+pub struct BatchUpsertInput<'a> {
+    pub project: &'a str,
+    pub fp: &'a Fingerprint,
+    pub title: &'a str,
+    pub culprit: Option<&'a str>,
+    pub level: Option<&'a str>,
+    pub now: DateTime<Utc>,
+    pub event: &'a Event,
+}
+
 /// Result of an upsert: the full `Issue` row as it stands after the write.
 /// `created` is true when this was the first event with that fingerprint —
 /// callers use it to choose `IssueCreated` vs `IssueUpdated` on the wire.
@@ -147,11 +174,29 @@ impl Store {
         // WAL gives us non-blocking readers alongside the single writer task.
         // `synchronous=NORMAL` is the standard pairing with WAL: durable across
         // app crashes, only loses writes on a host power loss.
+        //
+        // The pragma additions came out of stress testing. At the
+        // single-writer plateau (~1700 RPS) tail latency spiked to 200 ms+
+        // — characteristic of WAL-checkpoint contention. The pragmas:
+        //   - `busy_timeout = 5000` lets the writer wait briefly when a
+        //     reader holds a shared lock at checkpoint time instead of
+        //     erroring back up to the digest loop.
+        //   - `wal_autocheckpoint = 1000` (pages, sqlite default) is left
+        //     explicit so a future change is intentional, not accidental.
+        //   - `mmap_size = 268435456` (256 MB) lets SQLite memory-map
+        //     read pages instead of paging through the OS read syscall.
+        //     Snapshot loads on WS connect are the main beneficiary.
+        //   - `temp_store = MEMORY` keeps temp tables (used by query
+        //     planner spills) off disk on a small VM.
         let opts = SqliteConnectOptions::new()
             .filename(db_path)
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(std::time::Duration::from_millis(5000))
+            .pragma("wal_autocheckpoint", "1000")
+            .pragma("mmap_size", "268435456")
+            .pragma("temp_store", "MEMORY")
             .foreign_keys(true);
 
         // 4 connections is plenty: 1 writer (digest task) + a few concurrent
@@ -181,6 +226,10 @@ impl Store {
     /// bumped; the title/culprit/level fields are NOT overwritten because the
     /// first sighting is the canonical one (subsequent events refining the
     /// title would be confusing without a UI affordance).
+    // reason: still used directly by tests/api.rs and tests/store.rs to set
+    // up scenarios; the digest task uses `upsert_batch_with_events` so the
+    // bin compilation flags this as unused.
+    #[allow(dead_code)]
     pub async fn upsert_issue(
         &self,
         project: &str,
@@ -272,6 +321,118 @@ impl Store {
         })
     }
 
+    /// Upsert N events under one transaction. The digest task calls this
+    /// with up to `BATCH_SIZE` events drained from the ingest channel; the
+    /// single COMMIT amortizes the fsync that dominates per-event cost
+    /// under SQLite WAL with synchronous=NORMAL. Per stress testing, the
+    /// fsync at COMMIT was the main remaining latency contributor once
+    /// fingerprinting moved to the HTTP handler.
+    ///
+    /// Each tuple is `(upsert input, raw event payload to persist)`. The
+    /// returned `Vec<UpsertResult>` is in the same order as `batch`.
+    ///
+    /// Two events with the same `(project, fingerprint)` in one batch are
+    /// applied in order: the first creates the row, the second's UPDATE
+    /// bumps event_count to 2. That matches per-event semantics and is
+    /// the correct behavior for back-to-back arrivals.
+    pub async fn upsert_batch_with_events(
+        &self,
+        batch: &[BatchUpsertInput<'_>],
+    ) -> Result<Vec<UpsertResult>, DaemonError> {
+        let mut tx = self.pool.begin().await?;
+        let mut results = Vec::with_capacity(batch.len());
+
+        for input in batch {
+            let now_str = input.now.to_rfc3339();
+            let fp_str = input.fp.as_str();
+
+            let inserted = sqlx::query(
+                "INSERT INTO issues (project, fingerprint, title, culprit, level, status, \
+                 event_count, first_seen, last_seen) \
+                 VALUES (?, ?, ?, ?, ?, 'unresolved', 1, ?, ?) \
+                 ON CONFLICT(project, fingerprint) DO NOTHING",
+            )
+            .bind(input.project)
+            .bind(fp_str)
+            .bind(input.title)
+            .bind(input.culprit)
+            .bind(input.level)
+            .bind(&now_str)
+            .bind(&now_str)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+
+            let created = inserted == 1;
+            let mut regressed = false;
+            if !created {
+                let prev_status: String = sqlx::query_scalar(
+                    "SELECT status FROM issues WHERE project = ? AND fingerprint = ?",
+                )
+                .bind(input.project)
+                .bind(fp_str)
+                .fetch_one(&mut *tx)
+                .await?;
+
+                if IssueStatus::from_db_str(&prev_status) == IssueStatus::Resolved {
+                    regressed = true;
+                    sqlx::query(
+                        "UPDATE issues \
+                         SET event_count = event_count + 1, last_seen = ?, status = 'unresolved' \
+                         WHERE project = ? AND fingerprint = ?",
+                    )
+                    .bind(&now_str)
+                    .bind(input.project)
+                    .bind(fp_str)
+                    .execute(&mut *tx)
+                    .await?;
+                } else {
+                    sqlx::query(
+                        "UPDATE issues SET event_count = event_count + 1, last_seen = ? \
+                         WHERE project = ? AND fingerprint = ?",
+                    )
+                    .bind(&now_str)
+                    .bind(input.project)
+                    .bind(fp_str)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+            }
+
+            let row: IssueRow = sqlx::query_as(
+                "SELECT id, project, fingerprint, title, culprit, level, status, \
+                 event_count, first_seen, last_seen \
+                 FROM issues WHERE project = ? AND fingerprint = ?",
+            )
+            .bind(input.project)
+            .bind(fp_str)
+            .fetch_one(&mut *tx)
+            .await?;
+
+            // Append the raw event in the same tx so a partial commit can
+            // never leave an issue without its events.
+            let payload = serde_json::to_string(input.event)?;
+            sqlx::query(
+                "INSERT INTO events (issue_id, event_id, payload) VALUES (?, ?, ?) \
+                 ON CONFLICT(event_id) DO NOTHING",
+            )
+            .bind(row.id)
+            .bind(input.event.event_id.to_string())
+            .bind(payload)
+            .execute(&mut *tx)
+            .await?;
+
+            results.push(UpsertResult {
+                issue: row.into(),
+                created,
+                regressed,
+            });
+        }
+
+        tx.commit().await?;
+        Ok(results)
+    }
+
     /// Set the triage status for an issue, returning the updated row.
     /// Errors when the issue does not exist (callers should validate the
     /// id from the URL before calling).
@@ -304,6 +465,10 @@ impl Store {
     /// Append the raw event payload for an issue. `event_id` is the SDK-side
     /// UUID; UNIQUE constraint silently swallows duplicate POSTs (Sentry SDKs
     /// retry on transient failures and we don't want double-counting).
+    // reason: digest now writes events via `upsert_batch_with_events`; this
+    // single-event variant is only exercised by tests that need to seed
+    // events directly without going through the channel.
+    #[allow(dead_code)]
     pub async fn insert_event(&self, issue_id: i64, event: &Event) -> Result<(), DaemonError> {
         let payload = serde_json::to_string(event)?;
         sqlx::query(
@@ -473,6 +638,102 @@ impl Store {
         {
             tracing::debug!(%err, %name, "touch_project_used failed");
         }
+    }
+
+    /// Read the singleton retention settings row.
+    pub async fn get_retention_settings(&self) -> Result<RetentionSettings, DaemonError> {
+        // The migration seeds id=1 with all-zero defaults so this always
+        // returns a row; we still use `fetch_optional` defensively against
+        // a hand-edited DB with the row deleted.
+        let row: Option<(i64, i64, i64)> = sqlx::query_as(
+            "SELECT events_per_issue_max, issues_per_project_max, event_retention_days \
+             FROM retention_settings WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row
+            .map(|(e, i, d)| RetentionSettings {
+                events_per_issue_max: e,
+                issues_per_project_max: i,
+                event_retention_days: d,
+            })
+            .unwrap_or(RetentionSettings {
+                events_per_issue_max: 0,
+                issues_per_project_max: 0,
+                event_retention_days: 0,
+            }))
+    }
+
+    /// Update the singleton retention settings row.
+    pub async fn set_retention_settings(&self, s: RetentionSettings) -> Result<(), DaemonError> {
+        // INSERT…ON CONFLICT handles both the seeded path and the defensive
+        // case where the row was nuked by hand.
+        sqlx::query(
+            "INSERT INTO retention_settings \
+             (id, events_per_issue_max, issues_per_project_max, event_retention_days, updated_at) \
+             VALUES (1, ?, ?, ?, ?) \
+             ON CONFLICT(id) DO UPDATE SET \
+                 events_per_issue_max   = excluded.events_per_issue_max, \
+                 issues_per_project_max = excluded.issues_per_project_max, \
+                 event_retention_days   = excluded.event_retention_days, \
+                 updated_at             = excluded.updated_at",
+        )
+        .bind(s.events_per_issue_max)
+        .bind(s.issues_per_project_max)
+        .bind(s.event_retention_days)
+        .bind(Utc::now().to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Bound the per-issue event count to `max`, dropping oldest rows past
+    /// the limit. `max <= 0` is a no-op (the UI semantic for "unlimited").
+    /// Returns the number of event rows deleted.
+    pub async fn purge_excess_events_per_issue(&self, max: i64) -> Result<u64, DaemonError> {
+        if max <= 0 {
+            return Ok(0);
+        }
+        // Window function partitions by issue_id and ranks newest-first;
+        // anything past `max` is excess. Single statement so it's
+        // serializable under the digest task's writer lock.
+        let res = sqlx::query(
+            "DELETE FROM events WHERE id IN ( \
+                 SELECT id FROM ( \
+                     SELECT id, ROW_NUMBER() OVER ( \
+                         PARTITION BY issue_id \
+                         ORDER BY received_at DESC, id DESC \
+                     ) AS rn FROM events \
+                 ) WHERE rn > ? \
+             )",
+        )
+        .bind(max)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// Bound issues per project to `max`, dropping oldest issues
+    /// (smallest `last_seen`). Cascading FK on `events.issue_id` deletes
+    /// associated events with the issue row. `max <= 0` is a no-op.
+    pub async fn purge_excess_issues_per_project(&self, max: i64) -> Result<u64, DaemonError> {
+        if max <= 0 {
+            return Ok(0);
+        }
+        let res = sqlx::query(
+            "DELETE FROM issues WHERE id IN ( \
+                 SELECT id FROM ( \
+                     SELECT id, ROW_NUMBER() OVER ( \
+                         PARTITION BY project \
+                         ORDER BY last_seen DESC, id DESC \
+                     ) AS rn FROM issues \
+                 ) WHERE rn > ? \
+             )",
+        )
+        .bind(max)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
     }
 
     /// Delete events whose `received_at` predates `cutoff`. Issue rows are

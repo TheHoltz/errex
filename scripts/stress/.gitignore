@@ -1,0 +1,7 @@
+# Build artifacts (separate cargo workspace).
+/target
+
+# Per-run scenario outputs. Reproducible via run.sh; keep the harness +
+# REPORT.md in git, but not the raw JSON sweeps.
+/results
+/results-*

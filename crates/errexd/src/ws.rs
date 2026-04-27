@@ -40,8 +40,9 @@ pub async fn handle(
 ) -> Response {
     let store = state.store.clone();
     let rx = state.fanout.subscribe();
+    let metrics = state.metrics.clone();
     upgrade.on_upgrade(move |socket| async move {
-        if let Err(err) = run(socket, store, rx).await {
+        if let Err(err) = run(socket, store, rx, metrics).await {
             tracing::debug!(%err, "ws connection closed");
         }
     })
@@ -51,6 +52,7 @@ async fn run(
     socket: WebSocket,
     store: Store,
     mut fanout: broadcast::Receiver<ServerMessage>,
+    metrics: Arc<crate::metrics::Metrics>,
 ) -> Result<(), DaemonError> {
     let (mut write, mut read) = socket.split();
 
@@ -81,7 +83,8 @@ async fn run(
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                    tracing::debug!(skipped, "ws subscriber lagged");
+                    metrics.add_ws_lagged(skipped);
+                    tracing::warn!(skipped, "ws subscriber lagged");
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             },

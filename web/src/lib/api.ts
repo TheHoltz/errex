@@ -246,6 +246,19 @@ export const api = {
       authedSend<{ sessions_revoked: number }>(
         'POST',
         `/api/admin/users/${encodeURIComponent(username)}/sessions/revoke-all`
-      )
+      ),
+
+    getRetention: () => authedGet<RetentionSettings>('/api/admin/retention'),
+    setRetention: (s: RetentionSettings) =>
+      authedSend<RetentionSettings>('PUT', '/api/admin/retention', s)
   }
 };
+
+/** Operator-configurable retention limits. `0` means "unlimited" for any
+ *  field; the daemon's retention task reads these every hour and trims
+ *  excess events / issues / aged payloads accordingly. */
+export interface RetentionSettings {
+  events_per_issue_max: number;
+  issues_per_project_max: number;
+  event_retention_days: number;
+}

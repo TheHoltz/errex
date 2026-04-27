@@ -52,7 +52,12 @@ pub struct Config {
     /// Per-project ingest rate cap, events per minute. `0` = unlimited.
     /// The bucket also has burst capacity (`rate_limit_burst`) so short
     /// spikes don't get truncated; only sustained over-rate is rejected.
-    #[arg(long, env = "ERREXD_RATE_LIMIT_PER_MIN", default_value_t = 0)]
+    ///
+    /// Default 6000/min (≈100 events/sec per project): high enough that a
+    /// healthy app's spike is allowed through, low enough that one
+    /// misbehaving SDK can't consume the daemon's whole digest budget on
+    /// a small VM. Set to `0` explicitly to disable.
+    #[arg(long, env = "ERREXD_RATE_LIMIT_PER_MIN", default_value_t = 6000)]
     pub rate_limit_per_min: u32,
 
     /// Burst capacity for the per-project rate limiter. Ignored when
@@ -89,5 +94,24 @@ impl Config {
         format!("{}:{}", self.mcp_host, self.mcp_port)
             .parse()
             .expect("valid mcp bind addr")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// `rate_limit_per_min` defaults to a non-zero value so a self-host
+    /// daemon ships with backpressure on by default. The exact number
+    /// can change but `0` (unlimited) is wrong as a default.
+    #[test]
+    fn rate_limit_default_is_nonzero() {
+        let cfg = Config::parse_from(["errexd"]);
+        assert!(
+            cfg.rate_limit_per_min > 0,
+            "rate_limit_per_min default must be > 0, got {}",
+            cfg.rate_limit_per_min
+        );
     }
 }

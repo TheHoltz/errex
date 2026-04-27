@@ -19,6 +19,7 @@ mod fingerprint;
 mod ingest;
 mod lockout;
 mod mcp;
+mod metrics;
 mod rate_limit;
 mod retention;
 mod spa;
@@ -88,6 +89,12 @@ const INGEST_CHANNEL_CAPACITY: usize = 256;
 /// messages silently — the next snapshot they pull will catch them up.
 const FANOUT_CHANNEL_CAPACITY: usize = 64;
 
+/// Webhook channel: outbound notifications are infrequent (new issues +
+/// regressions only). A backed-up channel only loses alerts, which is
+/// preferable to back-pressuring digest. Surfaced via /metrics so a full
+/// queue is visible to operators.
+const WEBHOOK_CHANNEL_CAPACITY: usize = 64;
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -121,7 +128,7 @@ async fn main() -> anyhow::Result<()> {
     // Webhook channel is small: outbound notifications are infrequent (new
     // issues + regressions only). A backed-up channel only loses alerts,
     // which is preferable to backpressuring digest.
-    let (webhook_tx, webhook_rx) = mpsc::channel(64);
+    let (webhook_tx, webhook_rx) = mpsc::channel(WEBHOOK_CHANNEL_CAPACITY);
 
     let digest_handle = {
         let store = store.clone();
@@ -140,6 +147,7 @@ async fn main() -> anyhow::Result<()> {
         cfg.rate_limit_per_min,
         cfg.rate_limit_burst,
     ));
+    let metrics_handle = Arc::new(metrics::Metrics::new());
 
     let http_state = Arc::new(ingest::AppState {
         events: event_tx.clone(),
@@ -150,6 +158,9 @@ async fn main() -> anyhow::Result<()> {
         setup_token: cfg.admin_token.clone().filter(|s| !s.is_empty()),
         public_url: cfg.public_url.clone(),
         dev_mode: cfg.dev_mode,
+        metrics: metrics_handle.clone(),
+        webhook_capacity: WEBHOOK_CHANNEL_CAPACITY,
+        webhook_sender: webhook_tx.clone(),
     });
     // The WS fan-out is mounted on the HTTP listener via axum (see
     // crate::ws), so there's no separate task to spawn here.

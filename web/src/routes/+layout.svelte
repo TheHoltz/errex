@@ -4,7 +4,7 @@
   import { onDestroy, onMount, setContext } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { AlertCircle, Boxes, LogOut, Search, Users } from 'lucide-svelte';
+  import { AlertCircle, Boxes, LogOut, Search, Settings, Users } from 'lucide-svelte';
   import { actions } from '$lib/actions.svelte';
   import { auth } from '$lib/auth.svelte';
   import { bootstrapSignedIn } from '$lib/bootstrap';
@@ -37,6 +37,7 @@
   const onAuthRoute = $derived(path === '/login' || path === '/setup');
   const onProjectsRoute = $derived(path.startsWith('/projects'));
   const onTeamRoute = $derived(path.startsWith('/team'));
+  const onSettingsRoute = $derived(path.startsWith('/settings'));
 
   // Auth-gate effect: keep URL and `auth.status` in sync. Runs every time
   // either the route OR the auth state changes; the dual-direction redirect
@@ -203,6 +204,32 @@
               {/snippet}
             </Tooltip.Trigger>
             <Tooltip.Content side="right">Team · users · sessions</Tooltip.Content>
+          </Tooltip.Root>
+
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              {#snippet child({ props })}
+                <a
+                  {...props}
+                  href="/settings/retention"
+                  class={cn(
+                    'text-muted-foreground hover:text-foreground hover:bg-accent relative inline-flex h-10 w-10 items-center justify-center rounded-lg transition-colors',
+                    onSettingsRoute && 'bg-accent text-foreground'
+                  )}
+                  aria-label="Settings"
+                  aria-current={onSettingsRoute ? 'page' : undefined}
+                >
+                  {#if onSettingsRoute}
+                    <span
+                      class="bg-primary absolute top-1/2 -left-3 h-5 w-0.5 -translate-y-1/2 rounded-r-full"
+                      aria-hidden="true"
+                    ></span>
+                  {/if}
+                  <Settings class="h-5 w-5" strokeWidth={1.75} />
+                </a>
+              {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Content side="right">Settings · retention</Tooltip.Content>
           </Tooltip.Root>
         {/if}
 
