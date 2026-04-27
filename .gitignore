@@ -23,6 +23,7 @@ web/build
 # Local Claude Code / harness state — not for the public repo
 .claude/scheduled_tasks.lock
 .superpowers
+.worktrees
 
 # Local docker-compose overrides
 docker-compose.override.yml
