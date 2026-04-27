@@ -96,8 +96,14 @@
   // `projects.current === project.name` to avoid noise from a stale socket.
   // Debounced to once per second so an event burst doesn't hammer the
   // activity endpoint — the sparkline only ticks at 1h granularity anyway.
-  let lastRefetchAt = $state(0);
-  let pendingRefetch: ReturnType<typeof setTimeout> | null = $state(null);
+  //
+  // `lastRefetchAt` and `pendingRefetch` are deliberately plain `let` (not
+  // `$state`): if they were reactive, the effect's read+write of
+  // `pendingRefetch` inside the same flush would feed back into its own
+  // dep set and trip `effect_update_depth_exceeded` once `admin.bumpUsed`
+  // started churning the `project` prop reference on every WS tick.
+  let lastRefetchAt = 0;
+  let pendingRefetch: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
     // Touch the dependencies so Svelte tracks them.
     const at = eventStream.lastAt;
