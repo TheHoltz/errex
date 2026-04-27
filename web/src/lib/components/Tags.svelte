@@ -1,11 +1,12 @@
 <script lang="ts">
   import { Tag } from 'lucide-svelte';
   import { Badge } from '$lib/components/ui/badge';
+  import { dedupTags } from '$lib/eventDetail';
 
   type Props = { tags: Record<string, string> };
   let { tags }: Props = $props();
 
-  const entries = $derived(Object.entries(tags));
+  const entries = $derived(Object.entries(dedupTags(tags)));
 </script>
 
 <section class="px-3 py-2">

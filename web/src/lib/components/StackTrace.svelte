@@ -1,10 +1,13 @@
 <script lang="ts">
   import { Layers } from 'lucide-svelte';
+  import { partitionFrames } from '$lib/eventDetail';
   import StackFrame from './StackFrame.svelte';
   import type { Stack } from '$lib/types';
 
   type Props = { exception: Stack | null; loading?: boolean };
   let { exception, loading = false }: Props = $props();
+
+  const partition = $derived(partitionFrames(exception?.frames ?? []));
 </script>
 
 <section class="flex flex-col">
@@ -14,6 +17,11 @@
     >
       <Layers class="h-3.5 w-3.5" />
       Stack trace
+      {#if partition.inApp + partition.lib > 0}
+        <span class="ml-1 text-muted-foreground/70 normal-case tracking-normal">
+          {partition.inApp} in your code{partition.lib > 0 ? ` · ${partition.lib} lib` : ''}
+        </span>
+      {/if}
     </h2>
     {#if exception?.type || exception?.value}
       <p class="mt-1 font-mono text-[12px]">

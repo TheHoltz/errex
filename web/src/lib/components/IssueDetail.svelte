@@ -124,6 +124,16 @@
             {issue.level}
           </Badge>
         {/if}
+        {#if event?.environment}
+          <Badge variant="outline" class="px-2 py-0.5 text-[11px] uppercase tracking-wide">
+            {event.environment}
+          </Badge>
+        {/if}
+        {#if event?.release}
+          <Badge variant="outline" class="px-2 py-0.5 font-mono text-[11px]">
+            {event.release}
+          </Badge>
+        {/if}
         {#if issue.status === 'resolved'}
           <Badge variant="outline" class="gap-1.5 px-2 py-0.5 text-[11px]">
             <Check class="text-emerald-500 h-3.5 w-3.5" /> resolved
@@ -153,9 +163,13 @@
 
       <p class="text-muted-foreground text-[11px]">
         <span class="font-mono">#{shortFingerprint(issue.fingerprint)}</span>
-        · {issue.event_count} evt
-        · 1st {relativeTime(issue.first_seen)}
-        · last {relativeTime(issue.last_seen)}
+        {#if issue.event_count <= 1}
+          · seen {relativeTime(issue.last_seen)}
+        {:else}
+          · {issue.event_count} events
+          · 1st {relativeTime(issue.first_seen)}
+          · last {relativeTime(issue.last_seen)}
+        {/if}
       </p>
 
       <div class="mt-2 flex items-center gap-1.5">
@@ -281,7 +295,10 @@
     <div class="flex-1 overflow-y-auto">
       <StackTrace exception={event?.exception ?? null} loading={eventLoading} />
       <Separator />
-      <Breadcrumbs breadcrumbs={event?.breadcrumbs ?? []} />
+      <Breadcrumbs
+        breadcrumbs={event?.breadcrumbs ?? []}
+        crashTimestamp={event?.raw.payload.timestamp ?? event?.received_at ?? null}
+      />
       <Separator />
       <Tags tags={event?.tags ?? {}} />
     </div>
