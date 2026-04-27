@@ -54,13 +54,23 @@ async function loadWs() {
   return ws;
 }
 
+// Small accessor so each test reads a concrete `MockWebSocket` instead of
+// `MockWebSocket | undefined`. TS strict (`noUncheckedIndexedAccess`)
+// would otherwise force `?.` at every callsite, which obscures the
+// invariant the assertions are about to prove.
+function inst(n: number): MockWebSocket {
+  const ws = MockWebSocket.instances[n];
+  if (!ws) throw new Error(`no MockWebSocket instance at index ${n}`);
+  return ws;
+}
+
 describe('ws.connect', () => {
   it('opens a single WebSocket on first call', async () => {
     const { connect } = await loadWs();
     connect('foo');
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(MockWebSocket.instances[0].url).toMatch(/\/ws\/foo$/);
-    expect(MockWebSocket.instances[0].closed).toBe(false);
+    expect(inst(0).url).toMatch(/\/ws\/foo$/);
+    expect(inst(0).closed).toBe(false);
   });
 
   it('is a no-op when called again with the same project while CONNECTING', async () => {
@@ -68,16 +78,16 @@ describe('ws.connect', () => {
     connect('foo');
     connect('foo');
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(MockWebSocket.instances[0].closed).toBe(false);
+    expect(inst(0).closed).toBe(false);
   });
 
   it('is a no-op when called again with the same project while OPEN', async () => {
     const { connect } = await loadWs();
     connect('foo');
-    MockWebSocket.instances[0].readyState = MockWebSocket.OPEN;
+    inst(0).readyState = MockWebSocket.OPEN;
     connect('foo');
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(MockWebSocket.instances[0].closed).toBe(false);
+    expect(inst(0).closed).toBe(false);
   });
 
   it('tears down the existing socket and opens a new one when switching projects', async () => {
@@ -85,18 +95,18 @@ describe('ws.connect', () => {
     connect('foo');
     connect('bar');
     expect(MockWebSocket.instances).toHaveLength(2);
-    expect(MockWebSocket.instances[0].closed).toBe(true);
-    expect(MockWebSocket.instances[1].url).toMatch(/\/ws\/bar$/);
-    expect(MockWebSocket.instances[1].closed).toBe(false);
+    expect(inst(0).closed).toBe(true);
+    expect(inst(1).url).toMatch(/\/ws\/bar$/);
+    expect(inst(1).closed).toBe(false);
   });
 
   it('reopens after disconnect()', async () => {
     const { connect, disconnect } = await loadWs();
     connect('foo');
     disconnect();
-    expect(MockWebSocket.instances[0].closed).toBe(true);
+    expect(inst(0).closed).toBe(true);
     connect('foo');
     expect(MockWebSocket.instances).toHaveLength(2);
-    expect(MockWebSocket.instances[1].closed).toBe(false);
+    expect(inst(1).closed).toBe(false);
   });
 });
