@@ -7,6 +7,7 @@
   import { AlertCircle, LogOut, Search, Settings, Users } from 'lucide-svelte';
   import { actions } from '$lib/actions.svelte';
   import { auth } from '$lib/auth.svelte';
+  import { bootstrapSignedIn } from '$lib/bootstrap';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
   import ConnectionStatus from '$lib/components/ConnectionStatus.svelte';
   import Freshness from '$lib/components/Freshness.svelte';
@@ -16,11 +17,9 @@
   import Toaster from '$lib/components/Toaster.svelte';
   import { Button } from '$lib/components/ui/button';
   import * as Tooltip from '$lib/components/ui/tooltip';
-  import { api } from '$lib/api';
-  import { load, projects } from '$lib/stores.svelte';
   import { toast } from '$lib/toast.svelte';
   import { cn } from '$lib/utils';
-  import { connect, disconnect } from '$lib/ws';
+  import { disconnect } from '$lib/ws';
 
   let { children } = $props();
 
@@ -73,28 +72,23 @@
   onMount(async () => {
     actions.hydrate();
     await auth.hydrate();
+    // The bootstrap fires from the $effect below — that path covers both
+    // "valid cookie on first paint" and "user signs in within this tab".
+  });
 
-    // Skip the issues / WS bootstrap if we're not signed in. The redirect
-    // effect will land us on /login first; we re-run this on mount of the
-    // signed-in shell anyway.
-    if (auth.status !== 'signed_in') return;
-
-    try {
-      const summaries = await api.projects();
-      projects.available = summaries;
-      const initial = summaries[0]?.project ?? projects.current ?? 'default';
-      connect(initial);
-    } catch (err) {
-      console.warn('failed to load projects', err);
-      toast.error('Could not load projects', {
-        description: 'Check that errexd is reachable.'
-      });
-      connect(projects.current);
+  // Run the signed-in bootstrap once per signed-in user. Keying on the
+  // username lets a logout → re-login (potentially as a different user)
+  // re-fetch projects and reconnect the WS, while a status flap with the
+  // same user is a no-op.
+  let bootstrappedFor = $state<string | null>(null);
+  $effect(() => {
+    const username = auth.status === 'signed_in' ? (auth.user?.username ?? null) : null;
+    if (username && bootstrappedFor !== username) {
+      bootstrappedFor = username;
+      void bootstrapSignedIn();
+    } else if (auth.status === 'signed_out') {
+      bootstrappedFor = null;
     }
-
-    setTimeout(() => {
-      load.initialLoad = false;
-    }, 4_000);
   });
 
   onDestroy(() => disconnect());
@@ -105,15 +99,22 @@
   }
 </script>
 
-{#if onAuthRoute}
-  <!-- Full-screen routes (login/setup) draw their own chrome. -->
-  {@render children?.()}
-{:else if auth.status === 'unknown' || auth.status === 'signed_out'}
-  <!-- Brief flash while the auth-gate effect routes the user. Showing the
-       sign-in card here for a frame is worse than a blank screen. -->
-  <div class="bg-background h-screen"></div>
-{:else}
-  <Tooltip.Provider delayDuration={0}>
+<!-- Tooltip.Provider must wrap every children-rendering branch: during
+     a setup→/ or login→/ navigation, SvelteKit can swap `children` to the
+     new route's +page.svelte before $page.url.pathname propagates, so for
+     a frame we render signed-in content under the auth-route branch. If
+     Tooltip.Provider lived only inside the signed-in branch, that frame
+     would crash with "Context Tooltip.Provider not found" and leave the
+     transition wedged. -->
+<Tooltip.Provider delayDuration={0}>
+  {#if onAuthRoute}
+    <!-- Full-screen routes (login/setup) draw their own chrome. -->
+    {@render children?.()}
+  {:else if auth.status === 'unknown' || auth.status === 'signed_out'}
+    <!-- Brief flash while the auth-gate effect routes the user. Showing the
+         sign-in card here for a frame is worse than a blank screen. -->
+    <div class="bg-background h-screen"></div>
+  {:else}
     <div class="flex h-screen">
       <aside
         class="border-border bg-background flex w-14 shrink-0 flex-col items-center gap-3 border-r py-4"
@@ -259,8 +260,8 @@
         </main>
       </div>
     </div>
-  </Tooltip.Provider>
-{/if}
+  {/if}
+</Tooltip.Provider>
 
 <Toaster />
 <CommandPalette open={paletteOpen} onClose={() => (paletteOpen = false)} />
