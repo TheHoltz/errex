@@ -298,7 +298,10 @@ async fn ingest_without_auth_bumps_project_last_used_at() {
     // It must update on every successful ingest, not just when auth is on.
     let (router, store, _dir) = fixture_with_auth(false).await;
     let p = store.create_project("p").await.unwrap();
-    assert!(p.last_used_at.is_none(), "fresh project starts with no last_used_at");
+    assert!(
+        p.last_used_at.is_none(),
+        "fresh project starts with no last_used_at"
+    );
 
     let res = router
         .oneshot(
