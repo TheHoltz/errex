@@ -32,6 +32,9 @@
   import { cn, relativeTime } from '$lib/utils';
   import type { ActivityStats, AdminProject } from '$lib/api';
 
+  // How long the "Sent" affordance lingers before reverting to "Send test event".
+  const SENT_REVERT_MS = 2000;
+
   type Props = { project: AdminProject };
   let { project }: Props = $props();
 
@@ -63,6 +66,17 @@
       }
       void refreshActivity();
     }
+  });
+
+  // Mirror the `pendingRefetch` cleanup pattern below: a dedicated $effect
+  // tracks revertHandle so the timer is killed on component unmount —
+  // otherwise navigating away mid-flight leaks a phantom 2s timer that
+  // holds a closure reference to the destroyed reactive scope.
+  $effect(() => {
+    const h = revertHandle;
+    return () => {
+      if (h) clearTimeout(h);
+    };
   });
 
   async function refreshActivity() {
@@ -194,18 +208,24 @@
   }
 
   async function sendTest() {
+    // Capture the project name at click time. If the user switches projects
+    // while the fetch is in flight, the in-flight result must NOT mutate
+    // testStatus on the now-active project — that would flash "Sent" on
+    // the wrong project's button.
+    const expectedProject = project.name;
     testStatus = 'sending';
     if (revertHandle) {
       clearTimeout(revertHandle);
       revertHandle = null;
     }
     const result = await sendTestEvent(project.dsn);
+    if (project.name !== expectedProject) return;
     if (result.kind === 'ok') {
       testStatus = 'sent';
       revertHandle = setTimeout(() => {
         testStatus = 'idle';
         revertHandle = null;
-      }, 2000);
+      }, SENT_REVERT_MS);
       return;
     }
     testStatus = 'idle';
