@@ -13,7 +13,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$ROOT/target/release/errexd"
 DATA="$(mktemp -d)"
 PORT=19090
-WS_PORT=19091
 MCP_PORT=19092
 
 if [[ ! -x "$BIN" ]]; then
@@ -33,7 +32,6 @@ trap cleanup EXIT INT TERM
 
 ERREXD_DATA_DIR="$DATA" \
 ERREXD_HTTP_PORT="$PORT" \
-ERREXD_WS_PORT="$WS_PORT" \
 ERREXD_MCP_PORT="$MCP_PORT" \
 ERREXD_LOG_LEVEL=warn \
   "$BIN" &

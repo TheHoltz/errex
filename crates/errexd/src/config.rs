@@ -19,13 +19,6 @@ pub struct Config {
     #[arg(long, env = "ERREXD_HTTP_PORT", default_value_t = 9090)]
     pub http_port: u16,
 
-    /// Bind address for the WebSocket fan-out server (TUI clients).
-    #[arg(long, env = "ERREXD_WS_HOST", default_value = "0.0.0.0")]
-    pub ws_host: String,
-
-    #[arg(long, env = "ERREXD_WS_PORT", default_value_t = 9091)]
-    pub ws_port: u16,
-
     /// Bind address for the MCP server (AI agents). Stub for now.
     #[arg(long, env = "ERREXD_MCP_HOST", default_value = "0.0.0.0")]
     pub mcp_host: String,
@@ -90,12 +83,6 @@ impl Config {
         format!("{}:{}", self.http_host, self.http_port)
             .parse()
             .expect("valid http bind addr")
-    }
-
-    pub fn ws_addr(&self) -> SocketAddr {
-        format!("{}:{}", self.ws_host, self.ws_port)
-            .parse()
-            .expect("valid ws bind addr")
     }
 
     pub fn mcp_addr(&self) -> SocketAddr {
