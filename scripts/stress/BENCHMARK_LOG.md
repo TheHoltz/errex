@@ -117,6 +117,68 @@ it requires explicit user approval per the loop's hard rules. Until
 that approval lands, 421.72 is the achievable plateau on one CPU
 under the current architecture.
 
+## Phase 2 — minimum-RAM rework (Railway hosting target)
+
+After iter 10 plateau, rebooting the loop with a hosting-cost-aligned
+metric: minimize **idle RSS** (`cost_score_mb`) subject to a saturation
+headroom gate (`sat_rps ≥ 5000 AND sat_p99 ≤ 50 ms AND errors == 0`).
+The bench harness `scripts/stress/multibench.sh` measures three
+operating points in one run:
+
+1. **Idle** — boot + 30 s of no traffic (the floor an operator
+   provisions to).
+2. **Low load** — 30 s @ 100 RPS sustained (typical self-host).
+3. **Saturation** — 30 s @ 8000 RPS target (headroom check).
+
+A side audit during this phase uncovered that iter-3's `synchronous=OFF`
+change was never committed to source — the iter-3 bench saw it because
+the working tree had it, but a later `git restore .` (during iter 7's
+revert) silently dropped it. Phase 2 reapplies it.
+
+### Iteration A2 — SQLite pragmas tightened (and `synchronous=OFF` re-applied)
+
+- **changed:** `crates/errexd/src/store.rs`,
+  `crates/errexd/tests/store.rs` (pragma test pin updated).
+  - `synchronous = OFF` (was Normal — the iter-3 change that didn't
+    actually land in source).
+  - `mmap_size = 16 MB` (was 256 MB virtual).
+  - `cache_size = -1024` (1 MB; was sqlite default 2 MB).
+- **multibench (post A1+A2):**
+  `{"idle_rss_mean_mb":9.91,"low_rss_mean_mb":14.25,"sat_achieved_rps":7421,"sat_p99_ms":4.77,"sat_max_ms":128.96,"sat_rss_mean_mb":15.46,"errors":0,"headroom_ok":true}`
+- **vs phase-2 baseline (idle 9.75, sat_rss_mean 19.56, sat_p99 8.47):**
+  idle within variance (~0%), saturation RSS **-21%**, saturation p99
+  **-44%**.
+- **decision:** KEPT.
+- **notes:** Idle barely moved because at idle no SQL touches the
+  cache or mmap, so the pragma changes don't affect resident pages.
+  Where it pays off is on every batch under load: smaller cache and
+  no fsync mean less metadata buffering, so sat_rss_mean dropped
+  ~3 MB. Trade-off: occasional max_ms ~500 ms when WAL checkpoint
+  catches up async-style — still inside the 500 ms gate proxy.
+
+### Iteration A1 — `tokio` `worker_threads = 2`
+
+- **changed:** `crates/errexd/src/main.rs` —
+  `#[tokio::main(flavor = "multi_thread", worker_threads = 2)]`.
+- **rationale:** default `multi_thread` spawns `num_cpus()` worker
+  threads — on Railway's shared instances that may report 4–8 CPUs
+  visible even though we don't have parallelism to use. Two threads
+  = one for the digest task / SQLite writer, one for HTTP/WS
+  handlers. Each saved worker is stack + scheduler bookkeeping the
+  daemon doesn't carry at idle.
+- **multibench:**
+  `{"idle_rss_mean_mb":9.42,"low_rss_mean_mb":14.24,"sat_achieved_rps":7393,"sat_p99_ms":8.52,"sat_max_ms":129.53,"sat_rss_mean_mb":18.92,"errors":0,"headroom_ok":true}`
+- **vs phase-2 baseline (idle 9.75):** idle **-3.4%** (9.75 → 9.42).
+  Headroom still ok.
+- **decision:** KEPT.
+
+### Phase 2 baseline — multi-load-point measurement
+
+- **commit:** 2294137 (post-iter-10 plateau).
+- **multibench:**
+  `{"idle_rss_mean_mb":9.75,"idle_rss_min_mb":9.75,"idle_rss_max_mb":9.75,"low_rss_mean_mb":13.09,"low_rss_max_mb":14.73,"sat_achieved_rps":7413,"sat_p99_ms":8.47,"sat_max_ms":130.5,"sat_rss_mean_mb":19.56,"sat_rss_max_mb":40.81,"errors":0,"cost_score_mb":9.75,"headroom_ok":true}`
+- **decision:** BASELINE for the minimum-RAM phase.
+
 ## Iterations
 
 ### Iteration 0 — baseline

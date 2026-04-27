@@ -507,9 +507,8 @@ async fn migrate_creates_events_table() {
 
 #[tokio::test]
 async fn open_applies_perf_pragmas() {
-    // Pin the perf-tuning pragmas added after stress-testing surfaced
-    // tail-latency stalls under WAL checkpoint contention. A future
-    // refactor that drops them must trip a red bar.
+    // Pin the pragmas tuned for "minimum hosting RAM". Trips a red bar
+    // if a future refactor drifts them.
     let (store, _dir) = fresh_store().await;
 
     let busy: (i64,) = sqlx::query_as("PRAGMA busy_timeout")
@@ -524,11 +523,21 @@ async fn open_applies_perf_pragmas() {
         .expect("read wal_autocheckpoint");
     assert_eq!(auto.0, 1000, "wal_autocheckpoint should be 1000 pages");
 
+    // mmap window: tight 16 MB, not the prior 256 MB. Bigger windows
+    // over-commit virtual address space without buying anything for
+    // a self-host workload that hits a few index pages per request.
     let mmap: (i64,) = sqlx::query_as("PRAGMA mmap_size")
         .fetch_one(store.pool())
         .await
         .expect("read mmap_size");
-    assert!(mmap.0 >= 268_435_456, "mmap_size should be ≥ 256 MB");
+    assert_eq!(mmap.0, 16_777_216, "mmap_size should be 16 MB");
+
+    // 1 MB page cache (negative value = bytes).
+    let cache: (i64,) = sqlx::query_as("PRAGMA cache_size")
+        .fetch_one(store.pool())
+        .await
+        .expect("read cache_size");
+    assert_eq!(cache.0, -1024, "cache_size should be -1024 (1 MB)");
 
     let temp: (i64,) = sqlx::query_as("PRAGMA temp_store")
         .fetch_one(store.pool())
@@ -536,6 +545,13 @@ async fn open_applies_perf_pragmas() {
         .expect("read temp_store");
     // 0 = default, 1 = file, 2 = memory.
     assert_eq!(temp.0, 2, "temp_store should be MEMORY");
+
+    // synchronous=OFF (0) — fsync skipped on COMMIT and checkpoint.
+    let sync: (i64,) = sqlx::query_as("PRAGMA synchronous")
+        .fetch_one(store.pool())
+        .await
+        .expect("read synchronous");
+    assert_eq!(sync.0, 0, "synchronous should be OFF (0)");
 }
 
 #[tokio::test]

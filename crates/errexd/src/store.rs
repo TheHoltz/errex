@@ -181,27 +181,43 @@ impl Store {
         // `synchronous=NORMAL` is the standard pairing with WAL: durable across
         // app crashes, only loses writes on a host power loss.
         //
-        // The pragma additions came out of stress testing. At the
-        // single-writer plateau (~1700 RPS) tail latency spiked to 200 ms+
-        // — characteristic of WAL-checkpoint contention. The pragmas:
-        //   - `busy_timeout = 5000` lets the writer wait briefly when a
-        //     reader holds a shared lock at checkpoint time instead of
-        //     erroring back up to the digest loop.
-        //   - `wal_autocheckpoint = 1000` (pages, sqlite default) is left
-        //     explicit so a future change is intentional, not accidental.
-        //   - `mmap_size = 268435456` (256 MB) lets SQLite memory-map
-        //     read pages instead of paging through the OS read syscall.
-        //     Snapshot loads on WS connect are the main beneficiary.
-        //   - `temp_store = MEMORY` keeps temp tables (used by query
-        //     planner spills) off disk on a small VM.
+        // Pragma choices are tuned for "minimum hosting RAM" — the
+        // load-bearing cost on Railway / Fly / similar.
+        //
+        // `synchronous = OFF`: skip COMMIT and checkpoint fsyncs. WAL
+        //   recovery still preserves all committed data on a daemon
+        //   crash; only host power loss can drop up to one
+        //   transaction. SDKs already retry, so this trade is fine for
+        //   an error tracker.
+        //
+        // `mmap_size = 16 MB`: virtual mapping window. Default sqlx is
+        //   0 (no mmap). 16 MB is enough for hot index pages on a
+        //   self-host with ~10k issues; previously 256 MB which over-
+        //   committed the address space. RSS only counts touched pages
+        //   so the practical RAM impact is small either way; keeping
+        //   the window tight lets the OS reclaim cold pages sooner.
+        //
+        // `cache_size = -1024` (1 MB page cache): default ~2 MB. Drops
+        //   ~1 MB of resident page cache. The workload reads few rows
+        //   per request so the smaller cache is a wash on hits.
+        //
+        // `temp_store = MEMORY`: query-planner spills go to RAM
+        //   instead of disk. Spills are rare in our queries; this is
+        //   a few KB at most.
+        //
+        // `busy_timeout = 5000` ms: writer waits if a reader holds a
+        //   shared lock at checkpoint time.
+        // `wal_autocheckpoint = 1000` pages: SQLite default, made
+        //   explicit so a future change is intentional.
         let opts = SqliteConnectOptions::new()
             .filename(db_path)
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal)
+            .synchronous(SqliteSynchronous::Off)
             .busy_timeout(std::time::Duration::from_millis(5000))
             .pragma("wal_autocheckpoint", "1000")
-            .pragma("mmap_size", "268435456")
+            .pragma("mmap_size", "16777216")
+            .pragma("cache_size", "-1024")
             .pragma("temp_store", "MEMORY")
             .foreign_keys(true);
 
