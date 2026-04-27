@@ -18,7 +18,8 @@ futures-util = { workspace = true }
 
 axum = { workspace = true }
 tokio-tungstenite = { workspace = true }
-tower = { workspace = true }
+# `tower` only via `tower::ServiceExt::oneshot` in tests — kept in
+# dev-dependencies but not in the production build.
 tower-http = { workspace = true }
 
 rust-embed = { workspace = true }

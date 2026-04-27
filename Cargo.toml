@@ -32,7 +32,7 @@ mime_guess = "2"
 
 # Outbound webhook deliveries. Minimal reqwest: rustls-tls for HTTPS to
 # Slack/Discord/Teams without dragging in OpenSSL, plus the JSON helper.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 # Storage
 sqlx = { version = "0.8", default-features = false, features = [
