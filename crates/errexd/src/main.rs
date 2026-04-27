@@ -95,13 +95,14 @@ const FANOUT_CHANNEL_CAPACITY: usize = 64;
 /// queue is visible to operators.
 const WEBHOOK_CHANNEL_CAPACITY: usize = 64;
 
-// Worker threads pinned at 2. Default `multi_thread` spawns
-// `num_cpus()` workers — on Railway's small instances that may be 4–8
-// even though we don't need that parallelism. Two threads is enough:
-// one to drive the digest task / SQLite writer, one for HTTP/WS
-// handlers. Each saved worker thread is a stack + bookkeeping the
-// scheduler doesn't have to keep around.
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+// Single-threaded runtime. The hot path (digest task / SQLite writer)
+// is single-writer by design. With one CPU on Railway the scheduler
+// can't run threads in parallel anyway; current_thread drops the
+// inter-thread synchronization overhead and the second worker
+// stack. Re-tested under the size-optimized release profile —
+// previously failed under multi_thread+release, but with the
+// smaller code footprint the saturation gate still passes.
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
