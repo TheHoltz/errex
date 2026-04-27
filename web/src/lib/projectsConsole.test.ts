@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildTestEventCurl,
   formatWebhookHealth,
   isDeleteConfirmed,
   projectActivityStatus,
@@ -94,6 +95,70 @@ describe('isDeleteConfirmed', () => {
   it('rejects empty input even when project name is empty (defense in depth)', () => {
     expect(isDeleteConfirmed('', '')).toBe(false);
     expect(isDeleteConfirmed('   ', 'anything')).toBe(false);
+  });
+});
+
+describe('buildTestEventCurl', () => {
+  const DSN = 'http://localhost:9090/api/my-app/envelope/?sentry_key=tok123';
+  const FIXED = {
+    eventId: '00000000-0000-0000-0000-000000000001',
+    sentAt: '2026-04-26T12:00:00Z'
+  };
+
+  it('targets the DSN URL with POST', () => {
+    const cmd = buildTestEventCurl(DSN, FIXED);
+    expect(cmd).toMatch(/^curl -X POST '/);
+    expect(cmd).toContain(`'${DSN}'`);
+  });
+
+  it('sets the Sentry envelope content-type', () => {
+    const cmd = buildTestEventCurl(DSN, FIXED);
+    expect(cmd).toContain("-H 'content-type: application/x-sentry-envelope'");
+  });
+
+  it('uses --data-binary with $\'…\' so \\n stays literal in the body', () => {
+    // Plain `-d` collapses newlines on some shells; the envelope parser
+    // requires real newlines between header / item-header / payload.
+    const cmd = buildTestEventCurl(DSN, FIXED);
+    expect(cmd).toMatch(/--data-binary \$'/);
+  });
+
+  function extractBody(cmd: string): string {
+    const match = cmd.match(/--data-binary \$'([^']*)'/);
+    if (!match || match[1] === undefined) {
+      throw new Error(`expected --data-binary $'…' in: ${cmd}`);
+    }
+    return match[1];
+  }
+
+  it('emits exactly three newline-separated JSON lines: envelope header, item header, payload', () => {
+    const body = extractBody(buildTestEventCurl(DSN, FIXED));
+    // Trailing \n after the payload is part of the wire format. Splitting on \n
+    // therefore yields four parts where the last one is empty.
+    const parts = body.split('\\n');
+    expect(parts).toHaveLength(4);
+    expect(parts[3]).toBe('');
+
+    const envHeader = JSON.parse(parts[0] ?? '');
+    expect(envHeader.event_id).toBe(FIXED.eventId);
+    expect(envHeader.sent_at).toBe(FIXED.sentAt);
+
+    const itemHeader = JSON.parse(parts[1] ?? '');
+    expect(itemHeader.type).toBe('event');
+
+    const payload = JSON.parse(parts[2] ?? '');
+    expect(payload.level).toBe('error');
+    expect(payload.message).toMatch(/errex/i);
+    expect(payload.exception?.values?.[0]?.type).toBeDefined();
+  });
+
+  it('defaults eventId / sentAt when not provided (helper is callable in production)', () => {
+    const body = extractBody(buildTestEventCurl(DSN));
+    const envHeader = JSON.parse(body.split('\\n')[0] ?? '');
+    expect(envHeader.event_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    );
+    expect(() => new Date(envHeader.sent_at).toISOString()).not.toThrow();
   });
 });
 

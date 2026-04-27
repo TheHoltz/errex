@@ -3,7 +3,11 @@
 // this helper just talks to the ingest endpoint and reports what happened.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { sendTestEvent } from './testEvent';
+import {
+  ENVELOPE_CONTENT_TYPE,
+  buildEnvelopeBody,
+  sendTestEvent,
+} from './testEvent';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -12,7 +16,7 @@ afterEach(() => {
 const DSN = 'http://localhost:9090/api/demo/envelope/?sentry_key=abc123';
 
 describe('sendTestEvent', () => {
-  it('POSTs the documented JSON body to the DSN', async () => {
+  it('POSTs a Sentry envelope to the DSN with the envelope content-type', async () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
       status: 200,
@@ -26,12 +30,37 @@ describe('sendTestEvent', () => {
     expect(url).toBe(DSN);
     expect(init?.method).toBe('POST');
     expect((init?.headers as Record<string, string>)['content-type']).toBe(
-      'application/json'
+      ENVELOPE_CONTENT_TYPE
     );
-    expect(JSON.parse(init?.body as string)).toEqual({
-      event_id: 'test',
-      level: 'error',
-      message: 'errex test event',
+    // The daemon's `parse_envelope` requires three newline-separated JSON
+    // lines (envelope header, item header, payload) plus a trailing newline.
+    // Anything else returns 400 "invalid envelope". Lock that shape here.
+    const body = init?.body as string;
+    const parts = body.split('\n');
+    expect(parts).toHaveLength(4);
+    expect(parts[3]).toBe('');
+    expect(JSON.parse(parts[0] ?? '')).toMatchObject({
+      event_id: expect.any(String),
+      sent_at: expect.any(String),
+    });
+    expect(JSON.parse(parts[1] ?? '')).toEqual({ type: 'event' });
+    const payload = JSON.parse(parts[2] ?? '');
+    expect(payload.level).toBe('error');
+    expect(payload.message).toMatch(/errex/i);
+    expect(payload.exception?.values?.[0]?.type).toBeDefined();
+  });
+
+  it('buildEnvelopeBody produces deterministic output when given fixed eventId/sentAt', () => {
+    const body = buildEnvelopeBody({
+      eventId: '00000000-0000-0000-0000-000000000001',
+      sentAt: '2026-04-26T12:00:00Z',
+    });
+    expect(body.endsWith('\n')).toBe(true);
+    const parts = body.split('\n');
+    expect(parts).toHaveLength(4);
+    expect(JSON.parse(parts[0] ?? '')).toEqual({
+      event_id: '00000000-0000-0000-0000-000000000001',
+      sent_at: '2026-04-26T12:00:00Z',
     });
   });
 

@@ -23,6 +23,7 @@
   import { Separator } from '$lib/components/ui/separator';
   import * as Tooltip from '$lib/components/ui/tooltip';
   import {
+    buildTestEventCurl,
     formatWebhookHealth,
     projectActivityStatus,
     validateNewProjectName
@@ -286,11 +287,7 @@
   let deleteOpen = $state(false);
 
   async function copyCurl() {
-    const cmd = [
-      `curl -X POST '${project.dsn}' \\`,
-      `  -H 'content-type: application/json' \\`,
-      `  -d '{"event_id":"test","level":"error","message":"errex test event"}'`
-    ].join('\n');
+    const cmd = buildTestEventCurl(project.dsn);
     try {
       await navigator.clipboard.writeText(cmd);
       toast.success('Test command copied');

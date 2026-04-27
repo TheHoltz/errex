@@ -4,6 +4,8 @@
 // All time-dependent helpers take an explicit `now` (epoch ms) so tests
 // don't need to mock `Date.now`.
 
+import { ENVELOPE_CONTENT_TYPE, buildEnvelopeBody } from './testEvent';
+
 export type ProjectActivityStatus = {
   /** A Tailwind background class for the dot. */
   tone: string;
@@ -62,6 +64,22 @@ function formatRelative(diffMs: number): string {
  *  names ARE case-sensitive in errex). Empty input never matches. */
 export function isDeleteConfirmed(typed: string, projectName: string): boolean {
   return typed.trim().length > 0 && typed.trim() === projectName;
+}
+
+/** Builds a copy-pasteable curl that posts a Sentry envelope to the project's
+ *  ingest endpoint. The body comes from `buildEnvelopeBody` (shared with the
+ *  click-to-test button), wrapped in `$'…'` so the shell preserves the
+ *  literal newlines the parser requires. */
+export function buildTestEventCurl(
+  dsn: string,
+  opts: { eventId?: string; sentAt?: string } = {}
+): string {
+  const body = buildEnvelopeBody(opts).replace(/\n/g, '\\n');
+  return [
+    `curl -X POST '${dsn}' \\`,
+    `  -H 'content-type: ${ENVELOPE_CONTENT_TYPE}' \\`,
+    `  --data-binary $'${body}'`
+  ].join('\n');
 }
 
 /** Validation for the inline rename input. Mirrors the daemon's accepted
