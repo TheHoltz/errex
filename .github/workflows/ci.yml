@@ -30,6 +30,16 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@v2
 
+      # rust-embed bundles web/build/ into the binary at compile time. CI
+      # has never run the SPA build, so the folder is missing and the macro
+      # can't resolve `Assets::get`. A placeholder satisfies the macro for
+      # the cargo gates (clippy/fmt/test never serve real assets); the prod
+      # build path runs the full `bun run build` in docker.
+      - name: Prepare SPA placeholder for rust-embed
+        run: |
+          mkdir -p web/build
+          touch web/build/index.html
+
       - name: fmt
         run: cargo fmt --all -- --check
 
@@ -54,8 +64,8 @@ jobs:
       - name: Install web deps
         run: bun install --frozen-lockfile
 
-      - name: svelte-check
-        run: bun run check
-
-      - name: vitest
-        run: bun run test
+      # `bun run ci` = check + test + build. Building here catches SPA-side
+      # regressions (svelte compile errors, missing types) that wouldn't
+      # surface in `check` or `test` alone.
+      - name: web ci (check + test + build)
+        run: bun run ci
