@@ -1,0 +1,58 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please run `./errex.sh check` first if your
+        report touches Rust code — failing tests are the most useful repro.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A clear description of the broken behavior.
+      placeholder: e.g. "Ingesting a gzipped envelope returns 500 instead of 202"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      placeholder: e.g. "202 Accepted with the event landing in /api/issues"
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps. A failing test in `crates/errexd/tests/` is the gold standard.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: errex commit / version
+      description: Output of `git rev-parse HEAD` or the docker image tag.
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Host OS / arch
+      placeholder: e.g. "Ubuntu 24.04 x86_64", "macOS 15 arm64"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Daemon logs
+      description: Last ~50 lines of `./errex.sh logs` covering the failure.
+      render: shell

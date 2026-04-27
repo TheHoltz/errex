@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest a new capability or improvement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        errex aims to stay small. New features need to justify themselves
+        against the "lightweight first" rule — see
+        [CLAUDE.md](../CLAUDE.md) and [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you solving
+      description: Describe the user-visible pain. Don't lead with the proposed solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How you'd like errex to change. Sketch UX, wire format, or API as relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Smaller alternatives
+      description: What's the cheapest, smallest version of this that would still help? Why isn't that enough?
+
+  - type: textarea
+    id: cost
+    attributes:
+      label: Cost
+      description: New deps, RAM/disk impact, attack surface, ops complexity. Be honest.
