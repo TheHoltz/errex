@@ -221,11 +221,14 @@ impl Store {
             .pragma("temp_store", "MEMORY")
             .foreign_keys(true);
 
-        // 4 connections is plenty: 1 writer (digest task) + a few concurrent
-        // readers from /api routes and WS snapshot loads. Self-host pequeno
-        // does not need 8.
+        // 2 connections: 1 writer (digest task) + 1 shared reader for
+        // /api routes and WS snapshot loads. Self-host workload rarely
+        // has more than one concurrent read in flight; sqlx queues the
+        // rest with sub-millisecond wait. Each connection costs a
+        // prepared-statement cache + page buffer (~0.5 MB), so trimming
+        // to 2 saves ~1 MB at idle.
         let pool = SqlitePoolOptions::new()
-            .max_connections(4)
+            .max_connections(2)
             .connect_with(opts)
             .await?;
 

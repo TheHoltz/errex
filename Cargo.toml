@@ -80,3 +80,8 @@ errex-proto = { path = "crates/errex-proto" }
 lto = "thin"
 codegen-units = 1
 strip = true
+# `panic = "abort"` removes the unwind tables a daemon never uses
+# (we have no `catch_unwind` boundary, panics indicate broken
+# invariants and the supervisor should restart). Shrinks the binary
+# meaningfully and lowers code-page RSS at idle.
+panic = "abort"
