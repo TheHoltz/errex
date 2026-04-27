@@ -27,6 +27,7 @@
     projectActivityStatus,
     validateNewProjectName
   } from '$lib/projectsConsole';
+  import { sendTestEvent } from '$lib/testEvent';
   import { toast } from '$lib/toast.svelte';
   import { cn, relativeTime } from '$lib/utils';
   import type { ActivityStats, AdminProject } from '$lib/api';
@@ -42,6 +43,8 @@
   let webhookDraft = $state('');
   let savingWebhook = $state(false);
   let testingWebhook = $state(false);
+  let testStatus = $state<'idle' | 'sending' | 'sent'>('idle');
+  let revertHandle = $state<ReturnType<typeof setTimeout> | null>(null);
 
   // Reset draft + reload activity whenever the active project changes.
   // Without this, switching from "alpha" to "beta" in the rail would keep
@@ -53,6 +56,11 @@
       webhookDraft = project.webhook_url ?? '';
       stats = null;
       statsError = null;
+      testStatus = 'idle';
+      if (revertHandle) {
+        clearTimeout(revertHandle);
+        revertHandle = null;
+      }
       void refreshActivity();
     }
   });
@@ -182,6 +190,31 @@
       toast.error('Network error', { description: String(err) });
     } finally {
       testingWebhook = false;
+    }
+  }
+
+  async function sendTest() {
+    testStatus = 'sending';
+    if (revertHandle) {
+      clearTimeout(revertHandle);
+      revertHandle = null;
+    }
+    const result = await sendTestEvent(project.dsn);
+    if (result.kind === 'ok') {
+      testStatus = 'sent';
+      revertHandle = setTimeout(() => {
+        testStatus = 'idle';
+        revertHandle = null;
+      }, 2000);
+      return;
+    }
+    testStatus = 'idle';
+    if (result.kind === 'http') {
+      toast.error(`Ingest returned ${result.status}`, {
+        description: result.body || `HTTP ${result.status}`,
+      });
+    } else {
+      toast.error('Network error', { description: String(result.error) });
     }
   }
 
@@ -354,14 +387,36 @@
         Connection · DSN
       </Label>
       <DsnSnippet dsn={project.dsn} label={`DSN for ${project.name}`} />
-      <button
-        type="button"
-        onclick={copyCurl}
-        class="text-muted-foreground hover:text-foreground inline-flex items-center gap-1.5 self-start text-[11px] transition-colors"
-      >
-        <ClipboardCopy class="h-3 w-3" />
-        Copy a curl that sends a test event
-      </button>
+      <div class="flex flex-col items-start gap-1.5">
+        <Button
+          variant="outline"
+          size="sm"
+          onclick={sendTest}
+          disabled={testStatus !== 'idle'}
+          aria-label="Send a test event to this project's ingest endpoint"
+          class={cn(testStatus === 'sent' && 'text-emerald-500 hover:text-emerald-500')}
+        >
+          {#if testStatus === 'sending'}
+            <Loader2 class="h-3.5 w-3.5 animate-spin" />
+            Sending…
+          {:else if testStatus === 'sent'}
+            <Check class="h-3.5 w-3.5" />
+            Sent
+          {:else}
+            <Send class="h-3.5 w-3.5" />
+            Send test event
+          {/if}
+        </Button>
+        <Button
+          variant="link"
+          size="sm"
+          onclick={copyCurl}
+          class="text-muted-foreground hover:text-foreground h-auto gap-1.5 px-0 text-[11px] hover:no-underline"
+        >
+          <ClipboardCopy class="h-3 w-3" />
+          or copy as curl
+        </Button>
+      </div>
     </section>
 
     <Separator />
