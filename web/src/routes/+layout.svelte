@@ -4,7 +4,7 @@
   import { onDestroy, onMount, setContext } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { AlertCircle, LogOut, Search, Settings, Users } from 'lucide-svelte';
+  import { AlertCircle, Boxes, LogOut, Search, Users } from 'lucide-svelte';
   import { actions } from '$lib/actions.svelte';
   import { auth } from '$lib/auth.svelte';
   import { bootstrapSignedIn } from '$lib/bootstrap';
@@ -159,7 +159,7 @@
                 )}
                 aria-label="Projects"
               >
-                <Settings class="h-[18px] w-[18px]" />
+                <Boxes class="h-[18px] w-[18px]" />
               </a>
             {/snippet}
           </Tooltip.Trigger>
