@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Layers } from 'lucide-svelte';
   import StackFrame from './StackFrame.svelte';
   import type { Stack } from '$lib/types';
 
@@ -8,7 +9,10 @@
 
 <section class="flex flex-col">
   <header class="border-b border-border px-3 py-2">
-    <h2 class="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">
+    <h2
+      class="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wider text-muted-foreground"
+    >
+      <Layers class="h-3.5 w-3.5" />
       Stack trace
     </h2>
     {#if exception?.type || exception?.value}

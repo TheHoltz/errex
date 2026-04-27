@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { actions } from '$lib/actions.svelte';
+  import { formatIssueContext } from '$lib/aiContext';
   import { toggleMute, toggleResolve } from '$lib/issueOps';
   import { selectIssue } from '$lib/selection';
   import { issues, projects, selection, visibleIssues } from '$lib/stores.svelte';
@@ -39,6 +40,23 @@
     if (meta && (e.key === 'k' || e.key === 'K')) {
       e.preventDefault();
       onOpenPalette();
+      return;
+    }
+
+    // Cmd/Ctrl+Shift+C: copy AI context for the selected issue. Global
+    // (works from inputs too) so the user can yank context mid-search.
+    if (meta && e.shiftKey && (e.key === 'c' || e.key === 'C')) {
+      const issue = selectedIssue();
+      if (!issue) return;
+      e.preventDefault();
+      const text = formatIssueContext(issue, selection.event);
+      navigator.clipboard?.writeText(text).then(
+        () =>
+          toast.success('AI context copied', {
+            description: `${text.length.toLocaleString()} chars`
+          }),
+        () => toast.error('Could not copy')
+      );
       return;
     }
 

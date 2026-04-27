@@ -1,12 +1,14 @@
 <script lang="ts">
-  import { Loader2, Plus, Webhook } from 'lucide-svelte';
+  import { ListTree, Loader2, Plus, Webhook } from 'lucide-svelte';
   import { goto } from '$app/navigation';
   import { admin } from '$lib/admin.svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
+  import * as Tooltip from '$lib/components/ui/tooltip';
   import { projectActivityStatus } from '$lib/projectsConsole';
   import { toast } from '$lib/toast.svelte';
   import { cn, relativeTime } from '$lib/utils';
+  import { connect } from '$lib/ws';
 
   type Props = { activeName: string | null };
   let { activeName }: Props = $props();
@@ -33,12 +35,23 @@
 
   // Tick every 30s so "live → recent → idle" decays without a refetch.
   // The DB backing data hasn't changed; we just need the derived label
-  // to re-evaluate against a newer `Date.now()`.
+  // to re-evaluate against a newer `Date.now()`. Same tick also pulls a
+  // fresh admin list so cross-project `last_used_at` doesn't go stale —
+  // WS only delivers issues for `projects.current`, so projects you're
+  // not viewing would otherwise never refresh.
   let tick = $state(0);
   $effect(() => {
-    const id = setInterval(() => (tick += 1), 30_000);
+    const id = setInterval(() => {
+      tick += 1;
+      void admin.loadProjects();
+    }, 30_000);
     return () => clearInterval(id);
   });
+
+  function viewIssues(name: string) {
+    connect(name);
+    void goto('/');
+  }
 
   async function createProject(e: SubmitEvent) {
     e.preventDefault();
@@ -74,33 +87,58 @@
       {@const status = projectActivityStatus(p.last_used_at, Date.now() + tick * 0)}
       {@const isActive = p.name === activeName}
       <li>
-        <a
-          href={`/projects/${encodeURIComponent(p.name)}`}
+        <div
           class={cn(
-            'border-border hover:bg-accent/40 flex flex-col gap-1 border-b px-4 py-3 transition-colors',
-            isActive && 'bg-accent/60 border-l-2 border-l-emerald-500 pl-[14px]'
+            'border-border hover:bg-accent/40 group/row flex items-stretch border-b transition-colors',
+            isActive && 'bg-accent/60 border-l-2 border-l-emerald-500'
           )}
-          aria-current={isActive ? 'page' : undefined}
         >
-          <span class="flex items-center gap-2">
-            <span
-              class={cn('h-2 w-2 shrink-0 rounded-full', status.tone)}
-              title={status.label}
-              aria-hidden="true"
-            ></span>
-            <span class="truncate font-mono text-[13px]">{p.name}</span>
-            {#if p.webhook_url}
-              <Webhook class="text-emerald-500 ml-auto h-3 w-3 shrink-0" aria-label="webhook configured" />
-            {/if}
-          </span>
-          <span class="text-muted-foreground text-[11px]">
-            {#if p.last_used_at}
-              last event {relativeTime(p.last_used_at)}
-            {:else}
-              no events yet
-            {/if}
-          </span>
-        </a>
+          <a
+            href={`/projects/${encodeURIComponent(p.name)}`}
+            class={cn(
+              'flex min-w-0 flex-1 flex-col gap-1 px-4 py-3',
+              isActive && 'pl-3.5'
+            )}
+            aria-current={isActive ? 'page' : undefined}
+          >
+            <span class="flex items-center gap-2">
+              <span
+                class={cn('h-2 w-2 shrink-0 rounded-full', status.tone)}
+                title={status.label}
+                aria-hidden="true"
+              ></span>
+              <span class="truncate font-mono text-[13px]">{p.name}</span>
+              {#if p.webhook_url}
+                <Webhook class="text-emerald-500 ml-auto h-3 w-3 shrink-0" aria-label="webhook configured" />
+              {/if}
+            </span>
+            <span class="text-muted-foreground text-[11px]">
+              {#if p.last_used_at}
+                last event {relativeTime(p.last_used_at)}
+              {:else}
+                no events yet
+              {/if}
+            </span>
+          </a>
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              {#snippet child({ props })}
+                <Button
+                  {...props}
+                  variant="ghost"
+                  size="icon"
+                  onclick={() => viewIssues(p.name)}
+                  aria-label={`View issues for ${p.name}`}
+                  class="my-2 mr-2 h-8 w-8 self-center opacity-0 transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100 data-[active=true]:opacity-100"
+                  data-active={isActive}
+                >
+                  <ListTree class="h-4 w-4" />
+                </Button>
+              {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Content>View issues</Tooltip.Content>
+          </Tooltip.Root>
+        </div>
       </li>
     {/each}
 

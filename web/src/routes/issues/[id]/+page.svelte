@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getContext, onMount } from 'svelte';
+  import { getContext, onMount, untrack } from 'svelte';
   import IssueDetail from '$lib/components/IssueDetail.svelte';
   import IssueList from '$lib/components/IssueList.svelte';
   import { Resizable } from '$lib/components/ui/resizable';
@@ -12,16 +12,18 @@
   let leftPercent = $state(40);
   const filterRef = getContext<{ current: HTMLInputElement | null }>('filterRef');
 
-  // Sync the URL parameter into our selection store. The `selectIssue`
-  // helper is idempotent — calling it with the current id is a no-op — so
-  // running it both onMount and on $effect (for client-side navigations)
-  // keeps the deep-link case correct without spamming requests.
+  // Sync the URL parameter into our selection store. `untrack` is critical:
+  // selectIssue reads selection.issueId internally, which would otherwise
+  // make this effect rerun on every selection change and bounce the URL
+  // value back over an in-list click (handleSelect → selectIssue mutates
+  // issueId → effect re-fires with stale data.id → re-selects old row).
   onMount(() => {
     if (data.id != null) selectIssue(data.id);
   });
 
   $effect(() => {
-    if (data.id != null) selectIssue(data.id);
+    const id = data.id;
+    if (id != null) untrack(() => selectIssue(id));
   });
 
   const selectedIssue = $derived(

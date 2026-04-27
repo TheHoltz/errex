@@ -1,5 +1,6 @@
 import { browser } from '$app/environment';
 
+import { admin } from './admin.svelte';
 import { eventStream } from './eventStream.svelte';
 import { connection, issues, load, projects } from './stores.svelte';
 import type { ServerMessage } from './types';
@@ -133,6 +134,7 @@ function handle(msg: ServerMessage) {
     case 'issue_updated':
       issues.upsert(msg.issue);
       eventStream.record(msg.issue.id);
+      admin.bumpUsed(msg.issue.project, msg.issue.last_seen);
       return;
   }
 }

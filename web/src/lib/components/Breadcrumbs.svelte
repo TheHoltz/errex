@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Footprints } from 'lucide-svelte';
   import { Badge } from '$lib/components/ui/badge';
   import { Collapsible } from '$lib/components/ui/collapsible';
   import type { Breadcrumb } from '$lib/types';
@@ -27,7 +28,10 @@
 <section>
   <Collapsible bind:open triggerClass="px-3 py-2 sticky top-0 bg-background">
     {#snippet header()}
-      <h2 class="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <h2
+        class="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wider text-muted-foreground"
+      >
+        <Footprints class="h-3.5 w-3.5" />
         Breadcrumbs
         <span class="ml-1 text-muted-foreground/70 normal-case">({breadcrumbs.length})</span>
       </h2>

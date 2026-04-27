@@ -77,6 +77,16 @@ class AdminStore {
   getActivity(name: string): Promise<ActivityStats> {
     return api.admin.getActivity(name);
   }
+
+  /** Bump cached `last_used_at` in place when a fresh event lands over WS.
+   *  Avoids waiting for the next periodic refresh to clear "no events yet". */
+  bumpUsed(name: string, when: string): void {
+    const idx = this.projects.findIndex((p) => p.name === name);
+    if (idx === -1) return;
+    const cur = this.projects[idx]!;
+    if (cur.last_used_at && Date.parse(cur.last_used_at) >= Date.parse(when)) return;
+    this.projects[idx] = { ...cur, last_used_at: when };
+  }
 }
 
 function mapError(err: unknown): AdminError {
