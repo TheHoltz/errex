@@ -131,15 +131,16 @@
         <Tooltip.Root>
           <Tooltip.Trigger>
             {#snippet child({ props })}
-              <button
+              <Button
                 {...props}
-                type="button"
+                variant="ghost"
+                size="icon"
                 onclick={() => (paletteOpen = true)}
-                class="text-muted-foreground hover:text-foreground hover:bg-accent inline-flex h-10 w-10 items-center justify-center rounded-md transition-colors"
+                class="text-muted-foreground hover:text-foreground h-10 w-10"
                 aria-label="Search"
               >
                 <Search class="h-[18px] w-[18px]" />
-              </button>
+              </Button>
             {/snippet}
           </Tooltip.Trigger>
           <Tooltip.Content side="right">

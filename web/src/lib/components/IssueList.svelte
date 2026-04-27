@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Ban, BellOff, Check, Circle, Search, ShieldCheck } from 'lucide-svelte';
+  import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Skeleton } from '$lib/components/ui/skeleton';
   import * as Tooltip from '$lib/components/ui/tooltip';
@@ -77,19 +78,22 @@
         <Tooltip.Root>
           <Tooltip.Trigger>
             {#snippet child({ props })}
-              <button
+              <Button
                 {...props}
-                type="button"
+                variant="outline"
+                size="icon"
                 onclick={() => filter.toggleStatus(chip.key)}
                 aria-pressed={on}
                 aria-label={chip.label}
                 class={cn(
-                  'border-border inline-flex h-9 w-9 items-center justify-center rounded-md border transition-colors',
-                  on ? 'bg-accent text-foreground' : 'text-muted-foreground/60 hover:text-foreground hover:bg-accent/50'
+                  'h-9 w-9',
+                  on
+                    ? 'bg-accent text-foreground'
+                    : 'text-muted-foreground/60 hover:text-foreground hover:bg-accent/50'
                 )}
               >
                 <chip.Icon class="h-4 w-4" />
-              </button>
+              </Button>
             {/snippet}
           </Tooltip.Trigger>
           <Tooltip.Content>{chip.label} ({statusCount(chip.key)})</Tooltip.Content>
@@ -118,16 +122,17 @@
     {:else if visible.length === 0 && hasActiveFilter}
       <div class="text-muted-foreground flex flex-col items-center gap-2 p-8 text-center text-[12px]">
         <p>No issues match this filter.</p>
-        <button
-          type="button"
+        <Button
+          variant="link"
+          size="sm"
           onclick={() => {
             filter.query = '';
             filter.statuses = new Set<IssueStatus>(['unresolved']);
           }}
-          class="text-primary hover:underline text-[12px]"
+          class="h-auto p-0 text-[12px]"
         >
           Clear filters
-        </button>
+        </Button>
       </div>
     {:else if visible.length === 0}
       <div

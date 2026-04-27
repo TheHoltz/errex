@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Search } from 'lucide-svelte';
   import { goto } from '$app/navigation';
+  import { Button } from '$lib/components/ui/button';
   import { Dialog } from '$lib/components/ui/dialog';
   import { actions } from '$lib/actions.svelte';
   import { toggleMute, toggleResolve } from '$lib/issueOps';
@@ -198,12 +199,13 @@
     {:else}
       {#each commands as cmd, i (cmd.id)}
         <li>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onmouseenter={() => (cursor = i)}
             onclick={() => cmd.run()}
             class={cn(
-              'flex w-full items-center gap-3 px-4 py-2.5 text-left text-[13px]',
+              'h-auto w-full justify-start gap-3 rounded-none px-4 py-2.5 text-left text-[13px] font-normal',
               i === cursor ? 'bg-accent text-accent-foreground' : 'text-foreground'
             )}
           >
@@ -216,7 +218,7 @@
             {#if cmd.hint}
               <span class="text-muted-foreground shrink-0 font-mono text-[11px]">{cmd.hint}</span>
             {/if}
-          </button>
+          </Button>
         </li>
       {/each}
     {/if}
