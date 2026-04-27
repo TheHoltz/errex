@@ -71,15 +71,15 @@ export function isDeleteConfirmed(typed: string, projectName: string): boolean {
  *  click-to-test button), wrapped in `$'…'` so the shell preserves the
  *  literal newlines the parser requires. */
 export function buildTestEventCurl(
-  dsn: string,
+  ingestUrl: string,
   opts: { eventId?: string; sentAt?: string } = {}
 ): string {
   const body = buildEnvelopeBody(opts).replace(/\n/g, '\\n');
   // POSIX single-quote escape: project names allow apostrophes (e.g. "O'Brien"),
-  // and the daemon's DSN format embeds the name verbatim — without this, an
+  // and the ingest URL embeds the name verbatim — without this, an
   // apostrophe terminates the shell quoting and corrupts the request URL.
   return [
-    `curl -X POST '${shellEscapeSingleQuoted(dsn)}' \\`,
+    `curl -X POST '${shellEscapeSingleQuoted(ingestUrl)}' \\`,
     `  -H 'content-type: ${ENVELOPE_CONTENT_TYPE}' \\`,
     `  --data-binary $'${body}'`
   ].join('\n');

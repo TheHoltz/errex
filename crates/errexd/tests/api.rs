@@ -712,14 +712,20 @@ async fn admin_list_projects_returns_array_with_dsn() {
         Some(p.token.as_str())
     );
     let dsn = proj.get("dsn").and_then(|d| d.as_str()).unwrap();
-    assert!(
-        dsn.contains("alpha"),
-        "dsn must contain project name: {dsn}"
-    );
-    assert!(dsn.contains(&p.token), "dsn must contain token");
-    assert!(
-        dsn.starts_with("http://test.local:9090/"),
-        "dsn must use public_url"
+    // Sentry-standard DSN: `<scheme>://<token>@<host>/<project>`. Sentry
+    // SDKs require this exact shape; an `init({ dsn })` call will fail
+    // to parse anything else (no `?sentry_key=` form, no extra path).
+    let expected_dsn = format!("http://{}@test.local:9090/alpha", p.token);
+    assert_eq!(dsn, expected_dsn, "dsn must be Sentry-standard format");
+
+    let ingest_url = proj.get("ingest_url").and_then(|d| d.as_str()).unwrap();
+    assert_eq!(
+        ingest_url,
+        format!(
+            "http://test.local:9090/api/alpha/envelope/?sentry_key={}",
+            p.token
+        ),
+        "ingest_url must be the curl-friendly POST target"
     );
 }
 

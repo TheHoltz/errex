@@ -250,15 +250,16 @@ async fn run_project_cmd(cmd: ProjectCmd, cfg: &Config) -> anyhow::Result<()> {
     match cmd {
         ProjectCmd::Add { name, public_url } => {
             let p = store.create_project(&name).await?;
-            let dsn = format!(
-                "{}/api/{}/envelope/?sentry_key={}",
-                public_url.trim_end_matches('/'),
-                p.name,
-                p.token
-            );
-            println!("project: {}", p.name);
-            println!("token:   {}", p.token);
-            println!("dsn:     {}", dsn);
+            // Sentry-standard DSN for SDK consumers; the explicit ingest
+            // URL underneath is for curl-based smoke tests.
+            let trimmed = public_url.trim_end_matches('/');
+            let (scheme, authority) = trimmed.split_once("://").unwrap_or(("http", trimmed));
+            let dsn = format!("{scheme}://{}@{authority}/{}", p.token, p.name);
+            let ingest_url = format!("{trimmed}/api/{}/envelope/?sentry_key={}", p.name, p.token);
+            println!("project:    {}", p.name);
+            println!("token:      {}", p.token);
+            println!("dsn:        {dsn}");
+            println!("ingest_url: {ingest_url}");
         }
         ProjectCmd::List => {
             let list = store.list_admin_projects().await?;

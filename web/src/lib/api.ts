@@ -89,7 +89,11 @@ export interface AdminProject {
   name: string;
   token: string;
   webhook_url: string | null;
+  /** Sentry-standard DSN: `<scheme>://<token>@<host>/<project>`. This is
+   *  what every Sentry SDK expects in `Sentry.init({ dsn })`. */
   dsn: string;
+  /** Plain POST URL with `?sentry_key=` for curl-based smoke tests. */
+  ingest_url: string;
   created_at: string;
   last_used_at: string | null;
   /** HTTP status from the most recent webhook delivery, or 0 for transport

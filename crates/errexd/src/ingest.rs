@@ -289,8 +289,9 @@ async fn latest_event(
 
 // ----- admin endpoints -----
 
-/// JSON shape returned to the SPA's project-settings UI. Adds `dsn`
-/// (server-computed from `public_url`) on top of the persisted Project.
+/// JSON shape returned to the SPA's project-settings UI. Both `dsn`
+/// (Sentry-standard, for SDK consumers) and `ingest_url` (raw POST URL,
+/// for curl) are server-computed from `public_url`.
 #[derive(serde::Serialize)]
 struct AdminProjectView {
     name: String,
@@ -298,7 +299,12 @@ struct AdminProjectView {
     webhook_url: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
     last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Sentry-standard DSN: `<scheme>://<token>@<host>/<project>`.
+    /// Drop into `Sentry.init({ dsn })` and the SDK does the rest.
     dsn: String,
+    /// Plain HTTP URL for curl-based testing without an SDK.
+    /// Includes the auth token as `?sentry_key=...`.
+    ingest_url: String,
     /// Most recent webhook delivery health. `None` until the webhook task
     /// fires for the first time. See `record_webhook_attempt` for the 0
     /// sentinel meaning.
@@ -306,7 +312,27 @@ struct AdminProjectView {
     last_webhook_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// Build the Sentry-standard DSN for a project: `<scheme>://<token>@<host>/<project>`.
+///
+/// Sentry SDKs construct the ingest URL themselves — given this DSN they
+/// POST to `<scheme>://<host>/api/<project>/envelope/` with an
+/// `X-Sentry-Auth` header carrying the token. This format is what every
+/// SDK (browser, Node, Python, Ruby, etc.) expects; `init({ dsn })` will
+/// fail to parse anything else.
 fn dsn_for(public_url: &str, project: &str, token: &str) -> String {
+    let trimmed = public_url.trim_end_matches('/');
+    let (scheme, authority) = match trimmed.split_once("://") {
+        Some(parts) => parts,
+        None => ("http", trimmed),
+    };
+    format!("{scheme}://{token}@{authority}/{project}")
+}
+
+/// Build the raw POST URL an operator can use with `curl` to hand-test
+/// ingest without going through an SDK. Matches what the SDK would
+/// construct internally from the DSN, plus `?sentry_key=` for header-less
+/// auth (we accept the query-param form too).
+fn ingest_url_for(public_url: &str, project: &str, token: &str) -> String {
     format!(
         "{}/api/{}/envelope/?sentry_key={}",
         public_url.trim_end_matches('/'),
@@ -318,6 +344,7 @@ fn dsn_for(public_url: &str, project: &str, token: &str) -> String {
 impl AdminProjectView {
     fn from(p: crate::store::Project, public_url: &str) -> Self {
         let dsn = dsn_for(public_url, &p.name, &p.token);
+        let ingest_url = ingest_url_for(public_url, &p.name, &p.token);
         AdminProjectView {
             name: p.name,
             token: p.token,
@@ -325,6 +352,7 @@ impl AdminProjectView {
             created_at: p.created_at,
             last_used_at: p.last_used_at,
             dsn,
+            ingest_url,
             last_webhook_status: p.last_webhook_status,
             last_webhook_at: p.last_webhook_at,
         }

@@ -11,7 +11,9 @@ const sample: AdminProject = {
   name: 'demo',
   token: 'sample-token',
   webhook_url: null,
-  dsn: 'http://test.local:9090/api/demo/envelope/?sentry_key=sample-token',
+  // Sentry-standard DSN: <scheme>://<token>@<host>/<project>.
+  dsn: 'http://sample-token@test.local:9090/demo',
+  ingest_url: 'http://test.local:9090/api/demo/envelope/?sentry_key=sample-token',
   created_at: '2026-01-01T00:00:00Z',
   last_used_at: null,
   last_webhook_status: null,

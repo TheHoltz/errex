@@ -226,7 +226,7 @@
       clearTimeout(revertHandle);
       revertHandle = null;
     }
-    const result = await sendTestEvent(project.dsn);
+    const result = await sendTestEvent(project.ingest_url);
     if (project.name !== expectedProject) return;
     if (result.kind === 'ok') {
       testStatus = 'sent';
@@ -299,7 +299,7 @@
   let dangerOpen = $state(false);
 
   async function copyCurl() {
-    const cmd = buildTestEventCurl(project.dsn);
+    const cmd = buildTestEventCurl(project.ingest_url);
     try {
       await navigator.clipboard.writeText(cmd);
       toast.success('Test command copied');

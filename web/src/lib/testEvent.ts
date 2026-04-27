@@ -36,12 +36,15 @@ export function buildEnvelopeBody(
   ].join('\n');
 }
 
-export async function sendTestEvent(dsn: string): Promise<TestEventResult> {
+/** Posts directly to the daemon's ingest URL — the curl-style POST URL
+ *  with `?sentry_key=` query auth, NOT the Sentry-standard DSN (which
+ *  isn't a fetch-able URL on its own; SDKs construct the path from it). */
+export async function sendTestEvent(ingestUrl: string): Promise<TestEventResult> {
   // The catch covers both `fetch` rejection AND `res.text()` rejection —
   // a body read can fail mid-stream (connection drop, CORS body restrictions,
   // etc.) and the spec promises this helper never throws.
   try {
-    const res = await fetch(dsn, {
+    const res = await fetch(ingestUrl, {
       method: 'POST',
       headers: { 'content-type': ENVELOPE_CONTENT_TYPE },
       body: buildEnvelopeBody(),
@@ -60,14 +63,14 @@ export async function sendTestEvent(dsn: string): Promise<TestEventResult> {
     // reject with the same TypeError as a real offline failure. Probe a
     // signature-free endpoint on the same origin to disambiguate: if the
     // daemon answers, the envelope was specifically blocked client-side.
-    if (await isDaemonReachable(dsn)) return { kind: 'blocked' };
+    if (await isDaemonReachable(ingestUrl)) return { kind: 'blocked' };
     return { kind: 'network', error };
   }
 }
 
-async function isDaemonReachable(dsn: string): Promise<boolean> {
+async function isDaemonReachable(ingestUrl: string): Promise<boolean> {
   try {
-    const probe = new URL('/health', dsn).toString();
+    const probe = new URL('/health', ingestUrl).toString();
     const res = await fetch(probe, { method: 'GET', cache: 'no-store' });
     return res.ok;
   } catch {
