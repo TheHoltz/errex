@@ -233,6 +233,11 @@
       toast.error(`Ingest returned ${result.status}`, {
         description: result.body || `HTTP ${result.status}`,
       });
+    } else if (result.kind === 'blocked') {
+      toast.error('Request blocked by browser', {
+        description:
+          'An ad blocker (uBlock Origin, etc.) blocked the test event. Disable it for this site, or use “or copy as curl” instead.',
+      });
     } else {
       toast.error('Network error', { description: String(result.error) });
     }
@@ -407,7 +412,7 @@
         Connection · DSN
       </Label>
       <DsnSnippet dsn={project.dsn} label={`DSN for ${project.name}`} />
-      <div class="flex flex-col items-start gap-1.5">
+      <div class="flex flex-row items-center gap-3">
         <Button
           variant="outline"
           size="sm"
