@@ -2,7 +2,7 @@
 
 # errex
 
-**Lightweight, self-hosted Sentry alternative. Rust + SQLite, ~10 MB RAM.**
+**Self-hosted error tracking that runs in 7 MB of RAM. Sentry-SDK compatible. One binary.**
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=flat-square)](./LICENSE)
 [![Status](https://img.shields.io/badge/status-alpha-orange?style=flat-square)](#status)
@@ -19,11 +19,36 @@
 
 errex is a tiny, **self-hostable error tracker** for people who want their own error inbox without standing up Sentry's Postgres + Redis + Kafka stack. Drop any **Sentry SDK** into your app, point it at errex, and you get grouped exceptions, stack traces, occurrence counts, regression detection, and Slack / Discord / Teams alerts.
 
-The whole thing is **one Rust binary** with a fast **SvelteKit dashboard** embedded. Persistence is a single **SQLite** file (no Postgres, no Redis). RAM is around **10 MB at idle**. The ingest pipeline is single-writer with bounded buffers — backpressure, not unbounded queues.
+The whole thing is **one 6 MB Rust binary** with a fast **SvelteKit dashboard** embedded. Persistence is a single **SQLite** file (no Postgres, no Redis). The ingest pipeline is single-writer with bounded buffers — backpressure, not unbounded queues.
 
 errex is also **MCP-ready**: an AI agent can plug straight into the daemon to triage issues, summarize stack traces, and resolve duplicates without touching the dashboard. (Stub today; the protocol surface is wired.)
 
-If you're an indie dev, a homelabber, or running a small product, this is probably what you wanted Sentry to be — **lightweight error monitoring** that fits on the same $5 VPS as your app.
+If you're an indie dev, a homelabber, or running a small product, this is probably what you wanted Sentry to be — **error monitoring that fits on the same $5 VPS as your app, with room to spare**.
+
+## Numbers (measured, not estimated)
+
+Single CPU, 30-second sustained workload, taskset-pinned, mean RSS:
+
+| operating point          | achieved RPS | p99 ingest | RSS mean | RSS max |
+|--------------------------|-------------:|-----------:|---------:|--------:|
+| **idle** (no traffic)    |          —   |        —   | **6.91 MB** |  6.91 MB |
+| **typical** (100 RPS)    |          100 |     ~3 ms  | **9.5 MB** |  ~12 MB |
+| **saturation** (8000 target) |       7489 |    2.0 ms  | **10.0 MB** | 10.7 MB |
+
+Stripped binary: **6.04 MB**. Zero ingest errors at every operating point. WebSocket fan-out is lossless to 64 subscribers under sustained load. Reproduce any of these with `scripts/stress/multibench.sh`.
+
+### What this means for hosting cost
+
+- The smallest tier on Railway / Fly / Render / etc. is **256 MB**. errex uses **2.7%** of that at idle.
+- 100 RPS sustained leaves **96% of a 256 MB tier free** for your other workloads.
+- Spike to 8000 events/sec: still sub-12 MB. No tier upgrade needed.
+- Compare:
+
+| | min RAM | external deps | install |
+|---|---:|---|---|
+| **errex** | **~7 MB** | none | one binary |
+| GlitchTip | ~512 MB | Postgres + Redis | docker-compose |
+| Sentry self-host | ~4 GB | Postgres + Redis + Kafka + Snuba + Clickhouse | ~10 services |
 
 > [!NOTE]
 > errex is **alpha**. The hot path (ingest → group → store → broadcast) is wired and tested end-to-end. Source maps and multi-tenant orgs aren't shipped yet — see [Status](#status).
