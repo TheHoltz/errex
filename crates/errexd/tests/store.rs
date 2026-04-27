@@ -523,14 +523,15 @@ async fn open_applies_perf_pragmas() {
         .expect("read wal_autocheckpoint");
     assert_eq!(auto.0, 1000, "wal_autocheckpoint should be 1000 pages");
 
-    // mmap window: tight 16 MB, not the prior 256 MB. Bigger windows
-    // over-commit virtual address space without buying anything for
-    // a self-host workload that hits a few index pages per request.
+    // mmap disabled. SQLite reads via the regular page cache instead
+    // of mmap; on a self-host workload that hits a few index pages
+    // per request, the page cache is hot and the mmap overhead
+    // (virtual mapping bookkeeping) wasn't earning its keep.
     let mmap: (i64,) = sqlx::query_as("PRAGMA mmap_size")
         .fetch_one(store.pool())
         .await
         .expect("read mmap_size");
-    assert_eq!(mmap.0, 16_777_216, "mmap_size should be 16 MB");
+    assert_eq!(mmap.0, 0, "mmap_size should be 0 (disabled)");
 
     // 1 MB page cache (negative value = bytes).
     let cache: (i64,) = sqlx::query_as("PRAGMA cache_size")

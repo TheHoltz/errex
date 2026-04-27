@@ -216,7 +216,7 @@ impl Store {
             .synchronous(SqliteSynchronous::Off)
             .busy_timeout(std::time::Duration::from_millis(5000))
             .pragma("wal_autocheckpoint", "1000")
-            .pragma("mmap_size", "16777216")
+            .pragma("mmap_size", "0")
             .pragma("cache_size", "-1024")
             .pragma("temp_store", "MEMORY")
             .foreign_keys(true);
