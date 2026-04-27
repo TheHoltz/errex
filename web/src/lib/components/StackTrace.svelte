@@ -20,10 +20,10 @@
   </header>
 
   {#if loading}
-    <p class="text-muted-foreground px-3 py-4 text-[12px]">Carregando stack…</p>
+    <p class="text-muted-foreground px-3 py-4 text-[12px]">Loading stack…</p>
   {:else if !exception || exception.frames.length === 0}
     <p class="text-muted-foreground px-3 py-4 text-[12px]">
-      Sem stack trace para o último evento.
+      No stack trace for the latest event.
     </p>
   {:else}
     <ol class="flex flex-col">

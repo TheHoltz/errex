@@ -7,14 +7,14 @@
 
   const label = $derived.by(() => {
     void eventStream.tick;
-    if (eventStream.lastAt == null) return 'sem eventos ainda';
+    if (eventStream.lastAt == null) return 'no events yet';
     const seconds = Math.floor((Date.now() - eventStream.lastAt) / 1000);
-    if (seconds < 5) return 'agora mesmo';
-    if (seconds < 60) return `há ${seconds}s`;
+    if (seconds < 5) return 'just now';
+    if (seconds < 60) return `${seconds}s ago`;
     const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `há ${minutes}min`;
+    if (minutes < 60) return `${minutes}min ago`;
     const hours = Math.floor(minutes / 60);
-    return `há ${hours}h`;
+    return `${hours}h ago`;
   });
 
   const stale = $derived.by(() => {
@@ -34,7 +34,7 @@
 <Tooltip.Root>
   <Tooltip.Trigger
     class="text-muted-foreground hover:text-foreground hover:bg-accent inline-flex h-10 w-10 items-center justify-center rounded-md transition-colors"
-    aria-label={`Último evento ${label}`}
+    aria-label={`Last event ${label}`}
   >
     <RefreshCw
       class={cn(
@@ -45,6 +45,6 @@
     />
   </Tooltip.Trigger>
   <Tooltip.Content side="right">
-    Último evento {label}
+    Last event {label}
   </Tooltip.Content>
 </Tooltip.Root>

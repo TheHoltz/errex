@@ -35,12 +35,12 @@ async function setStatusWithToast(
         // Fire-and-forget; if the rollback itself fails we surface a 2nd toast.
         api.setStatus(issue.id, prev).catch((err) => {
           console.warn('undo failed', err);
-          toast.error('Não foi possível desfazer', { description: String(err) });
+          toast.error('Could not undo', { description: String(err) });
         });
       }
     });
   } catch (err) {
-    toast.error('Falha ao atualizar status', { description: String(err) });
+    toast.error('Failed to update status', { description: String(err) });
     throw err;
   }
 }
@@ -48,23 +48,23 @@ async function setStatusWithToast(
 /** Resolve ↔ Unresolved (a.k.a. the `e` shortcut). */
 export function toggleResolve(issue: Issue, opts: Partial<ToggleOptions> = {}): Promise<void> {
   if (issue.status === 'resolved') {
-    return setStatusWithToast(issue, 'unresolved', opts.inverse ?? 'Issue reaberta');
+    return setStatusWithToast(issue, 'unresolved', opts.inverse ?? 'Issue reopened');
   }
-  return setStatusWithToast(issue, 'resolved', opts.primary ?? 'Issue resolvida');
+  return setStatusWithToast(issue, 'resolved', opts.primary ?? 'Issue resolved');
 }
 
 /** Mute ↔ Unresolved (`m`). */
 export function toggleMute(issue: Issue, opts: Partial<ToggleOptions> = {}): Promise<void> {
   if (issue.status === 'muted') {
-    return setStatusWithToast(issue, 'unresolved', opts.inverse ?? 'Issue reativada');
+    return setStatusWithToast(issue, 'unresolved', opts.inverse ?? 'Issue reactivated');
   }
-  return setStatusWithToast(issue, 'muted', opts.primary ?? 'Issue silenciada');
+  return setStatusWithToast(issue, 'muted', opts.primary ?? 'Issue muted');
 }
 
 /** Ignore ↔ Unresolved (`i`). */
 export function toggleIgnore(issue: Issue): Promise<void> {
   if (issue.status === 'ignored') {
-    return setStatusWithToast(issue, 'unresolved', 'Issue reativada');
+    return setStatusWithToast(issue, 'unresolved', 'Issue reactivated');
   }
-  return setStatusWithToast(issue, 'ignored', 'Issue ignorada');
+  return setStatusWithToast(issue, 'ignored', 'Issue ignored');
 }

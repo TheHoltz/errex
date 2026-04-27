@@ -65,12 +65,12 @@
     // the toast Undo restores whatever was there.
     if (assignee === actions.me) {
       const prev = actions.unassign(issue);
-      toast.success('Atribuição removida', {
+      toast.success('Assignment removed', {
         undo: () => issue && actions.setAssignee(issue, prev)
       });
     } else {
       const prev = actions.assignToMe(issue);
-      toast.success(`Atribuída a ${actions.me}`, {
+      toast.success(`Assigned to ${actions.me}`, {
         undo: () => issue && actions.setAssignee(issue, prev)
       });
     }
@@ -80,8 +80,8 @@
     if (!issue) return;
     const url = `${location.origin}/issues/${issue.id}`;
     navigator.clipboard?.writeText(url).then(
-      () => toast.success('Link copiado'),
-      () => toast.error('Não foi possível copiar')
+      () => toast.success('Link copied'),
+      () => toast.error('Could not copy')
     );
   }
 
@@ -91,11 +91,11 @@
 {#if !issue}
   <div class="text-muted-foreground flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
     <SquareMousePointer class="h-8 w-8 opacity-60" />
-    <p class="text-[13px]">Selecione uma issue para inspecionar.</p>
+    <p class="text-[13px]">Select an issue to inspect.</p>
     <p class="text-[12px]">
       <kbd class="border-border mx-0.5 rounded border px-1 font-mono">j</kbd>/<kbd
         class="border-border mx-0.5 rounded border px-1 font-mono">k</kbd
-      > pra navegar.
+      > to navigate.
     </p>
   </div>
 {:else}
@@ -112,15 +112,15 @@
         {/if}
         {#if issue.status === 'resolved'}
           <Badge variant="outline" class="gap-1.5 px-2 py-0.5 text-[11px]">
-            <Check class="text-emerald-500 h-3.5 w-3.5" /> resolvida
+            <Check class="text-emerald-500 h-3.5 w-3.5" /> resolved
           </Badge>
         {:else if issue.status === 'muted'}
           <Badge variant="outline" class="gap-1.5 px-2 py-0.5 text-[11px]">
-            <BellOff class="h-3.5 w-3.5" /> silenciada
+            <BellOff class="h-3.5 w-3.5" /> muted
           </Badge>
         {:else if issue.status === 'ignored'}
           <Badge variant="outline" class="gap-1.5 px-2 py-0.5 text-[11px]">
-            <Ban class="h-3.5 w-3.5" /> ignorada
+            <Ban class="h-3.5 w-3.5" /> ignored
           </Badge>
         {/if}
         {#if assignee}
@@ -140,8 +140,8 @@
       <p class="text-muted-foreground text-[11px]">
         <span class="font-mono">#{shortFingerprint(issue.fingerprint)}</span>
         · {issue.event_count} evt
-        · 1º {relativeTime(issue.first_seen)}
-        · últ {relativeTime(issue.last_seen)}
+        · 1st {relativeTime(issue.first_seen)}
+        · last {relativeTime(issue.last_seen)}
       </p>
 
       <div class="mt-2 flex items-center gap-1.5">
@@ -153,7 +153,7 @@
                 variant="ghost"
                 size="icon"
                 class="h-9 w-9"
-                aria-label={issue.status === 'resolved' ? 'Reabrir' : 'Resolver'}
+                aria-label={issue.status === 'resolved' ? 'Reopen' : 'Resolve'}
                 onclick={onResolve}
               >
                 {#if issue.status === 'resolved'}
@@ -165,7 +165,7 @@
             {/snippet}
           </Tooltip.Trigger>
           <Tooltip.Content>
-            {issue.status === 'resolved' ? 'Reabrir' : 'Resolver'}
+            {issue.status === 'resolved' ? 'Reopen' : 'Resolve'}
             <kbd class="text-muted-foreground ml-1 font-mono text-[10px]">E</kbd>
           </Tooltip.Content>
         </Tooltip.Root>
@@ -178,7 +178,7 @@
                 variant="ghost"
                 size="icon"
                 class="h-9 w-9"
-                aria-label={issue.status === 'muted' ? 'Reativar' : 'Silenciar'}
+                aria-label={issue.status === 'muted' ? 'Reactivate' : 'Mute'}
                 onclick={onMute}
               >
                 {#if issue.status === 'muted'}
@@ -190,7 +190,7 @@
             {/snippet}
           </Tooltip.Trigger>
           <Tooltip.Content>
-            {issue.status === 'muted' ? 'Reativar' : 'Silenciar'}
+            {issue.status === 'muted' ? 'Reactivate' : 'Mute'}
             <kbd class="text-muted-foreground ml-1 font-mono text-[10px]">M</kbd>
           </Tooltip.Content>
         </Tooltip.Root>
@@ -203,7 +203,7 @@
                 variant="ghost"
                 size="icon"
                 class="h-9 w-9"
-                aria-label={assignee === actions.me ? 'Desatribuir' : 'Atribuir a mim'}
+                aria-label={assignee === actions.me ? 'Unassign' : 'Assign to me'}
                 onclick={onAssign}
               >
                 {#if assignee === actions.me}
@@ -215,7 +215,7 @@
             {/snippet}
           </Tooltip.Trigger>
           <Tooltip.Content>
-            {assignee === actions.me ? 'Desatribuir' : 'Atribuir a mim'}
+            {assignee === actions.me ? 'Unassign' : 'Assign to me'}
             <kbd class="text-muted-foreground ml-1 font-mono text-[10px]">A</kbd>
           </Tooltip.Content>
         </Tooltip.Root>
@@ -228,14 +228,14 @@
                 variant="ghost"
                 size="icon"
                 class="h-9 w-9"
-                aria-label="Copiar link"
+                aria-label="Copy link"
                 onclick={onCopyLink}
               >
                 <LinkIcon class="h-4 w-4" />
               </Button>
             {/snippet}
           </Tooltip.Trigger>
-          <Tooltip.Content>Copiar link</Tooltip.Content>
+          <Tooltip.Content>Copy link</Tooltip.Content>
         </Tooltip.Root>
       </div>
     </header>

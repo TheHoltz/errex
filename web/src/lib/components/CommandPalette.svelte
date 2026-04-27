@@ -49,9 +49,9 @@
       list.push({
         id: 'resolve',
         kind: 'action',
-        label: issue.status === 'resolved' ? 'Reabrir issue' : 'Resolver issue',
+        label: issue.status === 'resolved' ? 'Reopen issue' : 'Resolve issue',
         hint: 'E',
-        keywords: 'resolve resolver fix reabrir',
+        keywords: 'resolve fix reopen',
         run: () => {
           void toggleResolve(issue);
           onClose();
@@ -60,9 +60,9 @@
       list.push({
         id: 'mute',
         kind: 'action',
-        label: issue.status === 'muted' ? 'Reativar issue' : 'Silenciar issue',
+        label: issue.status === 'muted' ? 'Reactivate issue' : 'Mute issue',
         hint: 'M',
-        keywords: 'mute silenciar',
+        keywords: 'mute silence reactivate',
         run: () => {
           void toggleMute(issue);
           onClose();
@@ -71,12 +71,12 @@
       list.push({
         id: 'assign',
         kind: 'action',
-        label: 'Atribuir a mim',
+        label: 'Assign to me',
         hint: 'A',
-        keywords: 'assign atribuir',
+        keywords: 'assign',
         run: () => {
           const prev = actions.assignToMe(issue);
-          toast.success(`Atribuída a ${actions.me}`, {
+          toast.success(`Assigned to ${actions.me}`, {
             undo: () => actions.setAssignee(issue, prev)
           });
           onClose();
@@ -85,13 +85,13 @@
       list.push({
         id: 'copy',
         kind: 'action',
-        label: 'Copiar link da issue',
-        keywords: 'copy link copiar',
+        label: 'Copy issue link',
+        keywords: 'copy link',
         run: () => {
           const url = `${location.origin}/issues/${issue.id}`;
           navigator.clipboard?.writeText(url).then(
-            () => toast.success('Link copiado'),
-            () => toast.error('Não foi possível copiar')
+            () => toast.success('Link copied'),
+            () => toast.error('Could not copy')
           );
           onClose();
         }
@@ -104,9 +104,9 @@
       list.push({
         id: `project:${p.project}`,
         kind: 'project',
-        label: `Trocar projeto · ${p.project}`,
+        label: `Switch project · ${p.project}`,
         hint: `${p.issue_count}`,
-        keywords: `project projeto ${p.project}`,
+        keywords: `project switch ${p.project}`,
         run: () => {
           connect(p.project);
           onClose();
@@ -163,11 +163,11 @@
   function kindLabel(k: CommandKind): string {
     switch (k) {
       case 'action':
-        return 'Ação';
+        return 'Action';
       case 'issue':
         return 'Issue';
       case 'project':
-        return 'Projeto';
+        return 'Project';
     }
   }
 </script>
@@ -179,7 +179,7 @@
       type="text"
       bind:value={query}
       onkeydown={onKey}
-      placeholder="Buscar issue, trocar projeto, executar ação…"
+      placeholder="Search issue, switch project, run action…"
       class="flex-1 bg-transparent text-[14px] focus:outline-none placeholder:text-muted-foreground"
       autocomplete="off"
       spellcheck="false"
@@ -193,7 +193,7 @@
   <ul class="max-h-[55vh] overflow-y-auto py-2">
     {#if commands.length === 0}
       <li class="text-muted-foreground px-4 py-10 text-center text-[13px]">
-        Nada encontrado para "{query}".
+        Nothing found for "{query}".
       </li>
     {:else}
       {#each commands as cmd, i (cmd.id)}
@@ -224,8 +224,8 @@
   <div
     class="text-muted-foreground border-t border-border flex items-center gap-4 px-4 py-2 text-[11px]"
   >
-    <span><kbd class="font-mono">↑↓</kbd> navegar</span>
-    <span><kbd class="font-mono">↵</kbd> executar</span>
+    <span><kbd class="font-mono">↑↓</kbd> navigate</span>
+    <span><kbd class="font-mono">↵</kbd> execute</span>
     <span class="ml-auto">errex command palette</span>
   </div>
 </Dialog>

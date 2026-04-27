@@ -92,12 +92,12 @@
     <Tooltip.Root>
       <Tooltip.Trigger>
         {#snippet child({ props })}
-          <span {...props} aria-label="Subindo nos últimos 5 min" class="text-amber-400 shrink-0 inline-flex">
+          <span {...props} aria-label="Spiking in last 5 min" class="text-amber-400 shrink-0 inline-flex">
             <Flame class="h-4 w-4" />
           </span>
         {/snippet}
       </Tooltip.Trigger>
-      <Tooltip.Content>Subindo nos últimos 5 min</Tooltip.Content>
+      <Tooltip.Content>Spiking in last 5 min</Tooltip.Content>
     </Tooltip.Root>
   {/if}
 
@@ -105,34 +105,34 @@
     <Tooltip.Root>
       <Tooltip.Trigger>
         {#snippet child({ props })}
-          <span {...props} aria-label="Resolvida" class="text-emerald-500 shrink-0 inline-flex">
+          <span {...props} aria-label="Resolved" class="text-emerald-500 shrink-0 inline-flex">
             <Check class="h-4 w-4" />
           </span>
         {/snippet}
       </Tooltip.Trigger>
-      <Tooltip.Content>Resolvida</Tooltip.Content>
+      <Tooltip.Content>Resolved</Tooltip.Content>
     </Tooltip.Root>
   {:else if issue.status === 'muted'}
     <Tooltip.Root>
       <Tooltip.Trigger>
         {#snippet child({ props })}
-          <span {...props} aria-label="Silenciada" class="text-muted-foreground shrink-0 inline-flex">
+          <span {...props} aria-label="Muted" class="text-muted-foreground shrink-0 inline-flex">
             <BellOff class="h-4 w-4" />
           </span>
         {/snippet}
       </Tooltip.Trigger>
-      <Tooltip.Content>Silenciada</Tooltip.Content>
+      <Tooltip.Content>Muted</Tooltip.Content>
     </Tooltip.Root>
   {:else if issue.status === 'ignored'}
     <Tooltip.Root>
       <Tooltip.Trigger>
         {#snippet child({ props })}
-          <span {...props} aria-label="Ignorada" class="text-muted-foreground shrink-0 inline-flex">
+          <span {...props} aria-label="Ignored" class="text-muted-foreground shrink-0 inline-flex">
             <Ban class="h-4 w-4" />
           </span>
         {/snippet}
       </Tooltip.Trigger>
-      <Tooltip.Content>Ignorada</Tooltip.Content>
+      <Tooltip.Content>Ignored</Tooltip.Content>
     </Tooltip.Root>
   {/if}
 
@@ -140,14 +140,14 @@
     <Tooltip.Root>
       <Tooltip.Trigger>
         {#snippet child({ props })}
-          <span {...props} aria-label={`Atribuída a ${assignee}`} class="shrink-0 inline-flex">
+          <span {...props} aria-label={`Assigned to ${assignee}`} class="shrink-0 inline-flex">
             <Avatar.Root class="h-6 w-6 text-[11px]">
               <Avatar.Fallback class="bg-accent text-foreground">{initial}</Avatar.Fallback>
             </Avatar.Root>
           </span>
         {/snippet}
       </Tooltip.Trigger>
-      <Tooltip.Content>Atribuída a {assignee}</Tooltip.Content>
+      <Tooltip.Content>Assigned to {assignee}</Tooltip.Content>
     </Tooltip.Root>
   {/if}
 

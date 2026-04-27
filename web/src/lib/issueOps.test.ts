@@ -37,14 +37,14 @@ describe('toggleResolve', () => {
     const spy = vi.spyOn(api, 'setStatus').mockResolvedValue(issue({ status: 'resolved' }));
     await toggleResolve(issue({ status: 'unresolved' }));
     expect(spy).toHaveBeenCalledWith(7, 'resolved');
-    expect(toast.list[0]?.message).toMatch(/resolvida/i);
+    expect(toast.list[0]?.message).toMatch(/resolved/i);
   });
 
   it('moves resolved → unresolved (reopen)', async () => {
     const spy = vi.spyOn(api, 'setStatus').mockResolvedValue(issue({ status: 'unresolved' }));
     await toggleResolve(issue({ status: 'resolved' }));
     expect(spy).toHaveBeenCalledWith(7, 'unresolved');
-    expect(toast.list[0]?.message).toMatch(/reaberta/i);
+    expect(toast.list[0]?.message).toMatch(/reopened/i);
   });
 
   it('toast Undo calls setStatus with the previous value', async () => {

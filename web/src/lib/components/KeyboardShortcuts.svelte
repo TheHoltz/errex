@@ -83,7 +83,7 @@
       case 'a': {
         e.preventDefault();
         const prev = actions.assignToMe(issue);
-        toast.success(`Atribuída a ${actions.me}`, {
+        toast.success(`Assigned to ${actions.me}`, {
           undo: () => actions.setAssignee(issue, prev)
         });
         return;

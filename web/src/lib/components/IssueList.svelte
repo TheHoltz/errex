@@ -29,10 +29,10 @@
   };
 
   const chips: StatusChip[] = [
-    { key: 'unresolved', label: 'Não resolvidas', Icon: Circle },
-    { key: 'resolved', label: 'Resolvidas', Icon: Check },
-    { key: 'muted', label: 'Silenciadas', Icon: BellOff },
-    { key: 'ignored', label: 'Ignoradas', Icon: Ban }
+    { key: 'unresolved', label: 'Unresolved', Icon: Circle },
+    { key: 'resolved', label: 'Resolved', Icon: Check },
+    { key: 'muted', label: 'Muted', Icon: BellOff },
+    { key: 'ignored', label: 'Ignored', Icon: Ban }
   ];
 
   function isChecked(s: IssueStatus): boolean {
@@ -45,12 +45,12 @@
 
   const allClearLabel = $derived.by(() => {
     void eventStream.tick;
-    if (eventStream.lastAt == null) return 'Aguardando primeiro evento.';
+    if (eventStream.lastAt == null) return 'Waiting for first event.';
     const minutes = Math.floor((Date.now() - eventStream.lastAt) / 60_000);
-    if (minutes <= 0) return 'Tudo calmo · último evento agora mesmo.';
-    if (minutes === 1) return 'Tudo calmo · último evento há 1 min.';
-    if (minutes < 60) return `Tudo calmo · último evento há ${minutes} min.`;
-    return `Tudo calmo · último evento há ${Math.floor(minutes / 60)} h.`;
+    if (minutes <= 0) return 'All quiet · last event just now.';
+    if (minutes === 1) return 'All quiet · last event 1 min ago.';
+    if (minutes < 60) return `All quiet · last event ${minutes} min ago.`;
+    return `All quiet · last event ${Math.floor(minutes / 60)} h ago.`;
   });
 
   const hasActiveFilter = $derived(
@@ -67,7 +67,7 @@
       <Input
         bind:ref={inputEl}
         bind:value={filter.query}
-        placeholder="filtrar  /"
+        placeholder="filter  /"
         class="h-10 pl-9 text-[14px]"
       />
     </div>
@@ -117,7 +117,7 @@
       </ul>
     {:else if visible.length === 0 && hasActiveFilter}
       <div class="text-muted-foreground flex flex-col items-center gap-2 p-8 text-center text-[12px]">
-        <p>Nenhuma issue para esse filtro.</p>
+        <p>No issues match this filter.</p>
         <button
           type="button"
           onclick={() => {
@@ -126,7 +126,7 @@
           }}
           class="text-primary hover:underline text-[12px]"
         >
-          Limpar filtros
+          Clear filters
         </button>
       </div>
     {:else if visible.length === 0}
@@ -138,7 +138,7 @@
       >
         <ShieldCheck class="text-emerald-500/80 h-8 w-8" />
         <p class="text-foreground text-[13px] font-medium">{allClearLabel}</p>
-        <p class="text-[12px]">Sem issues abertas no projeto.</p>
+        <p class="text-[12px]">No open issues in this project.</p>
       </div>
     {:else}
       {#each visible as issue (issue.id)}

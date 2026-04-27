@@ -36,13 +36,13 @@
                 {...tooltipProps}
                 type="button"
                 class="text-muted-foreground hover:text-foreground hover:bg-accent inline-flex h-10 w-10 items-center justify-center rounded-md transition-colors data-[state=open]:bg-accent data-[state=open]:text-foreground"
-                aria-label="Trocar projeto"
+                aria-label="Switch project"
               >
                 <FolderKanban class="h-[18px] w-[18px]" />
               </button>
             {/snippet}
           </Tooltip.Trigger>
-          <Tooltip.Content side="right">Projeto: {projects.current}</Tooltip.Content>
+          <Tooltip.Content side="right">Project: {projects.current}</Tooltip.Content>
         </Tooltip.Root>
       {:else}
         <button

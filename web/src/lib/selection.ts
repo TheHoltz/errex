@@ -29,7 +29,7 @@ export async function selectIssue(id: number | null): Promise<void> {
   } catch (err) {
     if (ctrl.signal.aborted) return;
     console.warn('selectIssue: latestEvent failed', err);
-    toast.error('Falha ao carregar detalhes do evento');
+    toast.error('Failed to load event details');
   } finally {
     if (inflight === ctrl) inflight = null;
     if (selection.issueId === id) selection.eventLoading = false;

@@ -46,12 +46,12 @@
           }}
           class="text-primary hover:underline shrink-0 font-medium"
         >
-          Desfazer
+          Undo
         </button>
       {/if}
       <button
         type="button"
-        aria-label="Fechar"
+        aria-label="Close"
         onclick={() => toast.dismiss(t.id)}
         class="text-muted-foreground hover:text-foreground shrink-0"
       >
