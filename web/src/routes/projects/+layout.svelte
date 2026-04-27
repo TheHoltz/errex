@@ -91,45 +91,68 @@
     </div>
   {:else if isEmpty}
     <div class="flex flex-1 items-center justify-center px-6 py-10">
-      <Card.Root class="w-full max-w-md border-dashed">
-        <Card.Header class="items-center text-center">
-          <div
-            class="bg-accent/40 mb-2 inline-flex h-12 w-12 items-center justify-center rounded-full"
-          >
-            <Webhook class="text-muted-foreground h-5 w-5" />
-          </div>
-          <Card.Title class="text-[16px]">Create your first project</Card.Title>
-          <Card.Description class="text-[13px]">
-            A project gives you a DSN you can drop into an SDK or curl. Events you send to that
-            DSN show up live in the issue list.
-          </Card.Description>
-        </Card.Header>
-        <Card.Content>
-          <form onsubmit={createFirstProject} class="mx-auto flex max-w-sm items-end gap-3">
-            <div class="flex flex-1 flex-col gap-2">
-              <Label for="firstp" class="text-[12px]">Project name</Label>
-              <Input
-                id="firstp"
-                bind:value={firstProjectName}
-                placeholder="my-app"
-                autocomplete="off"
-                class="h-10 text-[13px]"
-              />
-            </div>
+      <!-- Inline style on the root carries the primary-tinted top hairline
+           and a confident drop shadow. HSL-with-alpha goes through `style`
+           rather than Tailwind arbitrary-value classes; this matches the
+           project convention used in /setup/+page.svelte. -->
+      <Card.Root
+        class="relative w-full max-w-md overflow-hidden p-8"
+        style="box-shadow: 0 24px 60px hsl(0 0% 0% / 0.55);"
+      >
+        <span
+          aria-hidden="true"
+          class="pointer-events-none absolute inset-x-0 top-0 h-px"
+          style="background: linear-gradient(90deg, transparent, hsl(var(--primary) / 0.45) 25%, hsl(var(--primary) / 0.45) 75%, transparent);"
+        ></span>
+        <div
+          class="text-primary mb-4 inline-flex h-10 w-10 items-center justify-center rounded-lg"
+          style="background: hsl(var(--primary) / 0.10); border: 1px solid hsl(var(--primary) / 0.22);"
+        >
+          <Webhook class="h-5 w-5" />
+        </div>
+        <h2 class="text-[17px] font-semibold tracking-tight">Create your first project</h2>
+        <p class="text-muted-foreground mt-1.5 max-w-[38ch] text-[13px] leading-relaxed">
+          A project gives you a DSN you can drop into an SDK or curl. Events you send to that
+          DSN show up live in the issue list.
+        </p>
+        <form onsubmit={createFirstProject} class="mt-6 flex flex-col gap-2">
+          <Label for="firstp" class="text-muted-foreground text-[11px]">Project name</Label>
+          <Input
+            id="firstp"
+            bind:value={firstProjectName}
+            placeholder="my-app"
+            autocomplete="off"
+            autofocus
+            class="h-10 text-[13px]"
+          />
+          <span class="text-muted-foreground/80 text-[11px]">
+            shows up in URLs and the DSN · case-sensitive · max 64 chars
+          </span>
+          <div class="mt-2 flex justify-end">
             <Button
               type="submit"
               disabled={creatingFirst || firstProjectName.trim().length === 0}
               class="h-10"
+              style="box-shadow: 0 1px 0 hsla(0,0%,100%,0.18) inset, 0 8px 22px hsl(var(--primary) / 0.28);"
             >
               {#if creatingFirst}
                 <Loader2 class="h-4 w-4 animate-spin" />
               {:else}
                 <Plus class="h-4 w-4" />
               {/if}
-              Create
+              Create project
             </Button>
-          </form>
-        </Card.Content>
+          </div>
+        </form>
+        <div
+          class="border-border text-muted-foreground/70 mt-5 flex items-center gap-2 border-t pt-4 text-[11px]"
+        >
+          <span>next</span>
+          <span class="bg-muted-foreground/50 h-1 w-1 rounded-full" aria-hidden="true"></span>
+          <span>copy your DSN</span>
+          <span class="bg-muted-foreground/50 h-1 w-1 rounded-full" aria-hidden="true"></span>
+          <span>send a test event</span>
+        </div>
       </Card.Root>
     </div>
   {:else}
