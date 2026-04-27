@@ -4,8 +4,6 @@
 
 **The lightweight, self-hosted Sentry alternative — one Rust binary, one SQLite file, ~10 MB RAM, fits on a $5 VPS.**
 
-<sub>Self-hosted error tracking · Sentry-SDK compatible ingest · Rust · SQLite · SvelteKit dashboard · MCP-ready for AI agents · Homelab-friendly · AGPL-3.0</sub>
-
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=flat-square)](./LICENSE)
 [![Status](https://img.shields.io/badge/status-alpha-orange?style=flat-square)](#status)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-dea584?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
