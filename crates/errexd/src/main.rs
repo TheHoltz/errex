@@ -165,6 +165,7 @@ async fn main() -> anyhow::Result<()> {
         setup_token: cfg.admin_token.clone().filter(|s| !s.is_empty()),
         public_url: cfg.public_url.clone(),
         dev_mode: cfg.dev_mode,
+        trust_proxy_headers: cfg.trust_proxy_headers,
         metrics: metrics_handle.clone(),
         webhook_capacity: WEBHOOK_CHANNEL_CAPACITY,
         webhook_sender: webhook_tx.clone(),

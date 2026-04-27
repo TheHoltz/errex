@@ -98,6 +98,16 @@ pub struct Config {
     /// project-management UI; empty string is treated as unset.
     #[arg(long, env = "ERREX_ADMIN_TOKEN", default_value = "")]
     pub admin_token: Option<String>,
+
+    /// When true, the daemon trusts the first hop in the `X-Forwarded-For`
+    /// header as the client IP for lockout / audit purposes. Off by default
+    /// because the daemon's stock deploy is reachable directly — an attacker
+    /// could otherwise rotate this header per request to bypass the per-IP
+    /// lockout policy. Operators who front the daemon with a reverse proxy
+    /// that strips and re-emits a single XFF should opt in via
+    /// `ERREX_TRUST_PROXY_HEADERS=true`.
+    #[arg(long, env = "ERREX_TRUST_PROXY_HEADERS", default_value_t = false)]
+    pub trust_proxy_headers: bool,
 }
 
 impl Config {

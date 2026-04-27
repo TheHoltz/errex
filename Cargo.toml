@@ -23,7 +23,7 @@ futures-util = "0.3"
 axum = { version = "0.7", features = ["ws"] }
 tokio-tungstenite = "0.21"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.6", features = ["cors", "set-header"] }
 hyper = "1"
 
 # Embedded SPA assets
@@ -72,6 +72,10 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # crate it re-exports.
 argon2 = "0.5"
 password-hash = { version = "0.5", features = ["alloc"] }
+# Constant-time byte comparison for token equality checks. Already pulled
+# in transitively by argon2 / password-hash, declared explicitly so the
+# usage doesn't break on a future major bump in those crates.
+subtle = "2"
 
 # Internal
 errex-proto = { path = "crates/errex-proto" }

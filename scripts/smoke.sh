@@ -46,11 +46,32 @@ done
 echo "[smoke] /health"
 curl -sf "http://127.0.0.1:$PORT/health" | grep -q '"status":"ok"'
 
-echo "[smoke] /api/projects (empty)"
-curl -sf "http://127.0.0.1:$PORT/api/projects" | grep -q '\['
+echo "[smoke] /api/auth/setup-status (no auth needed)"
+curl -sf "http://127.0.0.1:$PORT/api/auth/setup-status" | grep -q 'needs_setup'
+
+echo "[smoke] /api/projects unauth → 401"
+status="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/projects")"
+[[ "$status" == "401" ]] || { echo "smoke: expected 401, got $status" >&2; exit 1; }
+
+echo "[smoke] /ws/anything unauth handshake rejected"
+ws_status="$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Connection: Upgrade" -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+  -H "Sec-WebSocket-Version: 13" \
+  "http://127.0.0.1:$PORT/ws/x")"
+[[ "$ws_status" == "401" ]] || { echo "smoke: ws expected 401, got $ws_status" >&2; exit 1; }
 
 echo "[smoke] / serves SPA shell"
 body="$(curl -sf "http://127.0.0.1:$PORT/")"
 echo "$body" | grep -qi '<html' || { echo "smoke: index.html not served" >&2; exit 1; }
+
+echo "[smoke] response carries security headers"
+hdrs="$(curl -sI "http://127.0.0.1:$PORT/health")"
+echo "$hdrs" | grep -qi '^x-content-type-options: nosniff' \
+  || { echo "smoke: missing X-Content-Type-Options" >&2; exit 1; }
+echo "$hdrs" | grep -qi '^x-frame-options: DENY' \
+  || { echo "smoke: missing X-Frame-Options" >&2; exit 1; }
+echo "$hdrs" | grep -qi '^content-security-policy:' \
+  || { echo "smoke: missing CSP" >&2; exit 1; }
 
 echo "[smoke] OK"

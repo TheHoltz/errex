@@ -19,7 +19,23 @@ use rust_embed::RustEmbed;
 struct Assets;
 
 pub async fn handler(uri: Uri) -> Response {
-    let path = uri.path().trim_start_matches('/');
+    let raw_path = uri.path();
+
+    // Unknown `/api/*` paths must NOT serve index.html — a typo in a fetch
+    // call would otherwise return 200 + HTML, and a JSON-expecting client
+    // (the SPA, curl, an SDK) would surface "Unexpected token '<'" instead
+    // of "endpoint missing". Return a clean JSON 404 so callers get a
+    // useful error.
+    if raw_path.starts_with("/api/") {
+        return (
+            StatusCode::NOT_FOUND,
+            [(header::CONTENT_TYPE, "application/json")],
+            r#"{"error":"endpoint not found"}"#,
+        )
+            .into_response();
+    }
+
+    let path = raw_path.trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
 
     if let Some(file) = Assets::get(path) {
@@ -27,8 +43,7 @@ pub async fn handler(uri: Uri) -> Response {
     }
 
     // SPA fallback: any non-asset path serves index.html so SvelteKit's
-    // client router can take over. Requests under /api/* never reach here —
-    // they're handled by the explicit routes above this fallback.
+    // client router can take over.
     if let Some(file) = Assets::get("index.html") {
         return file_response("index.html", file.data.as_ref());
     }

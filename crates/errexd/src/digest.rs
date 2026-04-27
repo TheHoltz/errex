@@ -181,7 +181,7 @@ async fn process_batch(
         }
     };
 
-    for (rec, result) in buf.iter().zip(results.into_iter()) {
+    for (rec, result) in buf.iter().zip(results) {
         if result.regressed {
             tracing::warn!(
                 project = %rec.project,

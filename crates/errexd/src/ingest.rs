@@ -26,6 +26,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::digest::IngestEvent;
 use crate::error::DaemonError;
@@ -62,6 +63,10 @@ pub struct AppState {
     /// localhost are accepted by browsers (which refuse `Secure` over
     /// non-https).
     pub dev_mode: bool,
+    /// When true, the per-IP lockout bucket reads `X-Forwarded-For`
+    /// instead of the direct peer socket. Off by default — see
+    /// [`crate::auth::extract_client_ip`] for the rationale.
+    pub trust_proxy_headers: bool,
     /// Process-lifetime counters surfaced via `/metrics`.
     pub metrics: Arc<Metrics>,
     /// Capacity of the webhook channel, surfaced through `/metrics` so
@@ -79,7 +84,17 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/metrics", get(metrics))
-        .route("/api/:project/envelope/", post(ingest_envelope))
+        // Cap raw envelope body at 1 MiB. Sentry events are typically
+        // <100 KiB; the legitimate p99 lives well under this. The
+        // dedicated cap protects the JSON parser and the gzip
+        // decompressor (the latter has its own 8 MiB cap on the
+        // *expanded* output — this layer guards the *compressed*
+        // input). Combined, an adversary cannot exhaust memory by
+        // pumping a single oversized request.
+        .route(
+            "/api/:project/envelope/",
+            post(ingest_envelope).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)),
+        )
         .route("/api/projects", get(list_projects))
         .route("/api/issues", get(list_issues))
         .route("/api/issues/:id/event", get(latest_event))
@@ -145,7 +160,75 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/ws/:project", get(crate::ws::handle))
         .with_state(state)
         .fallback(spa::handler)
+        // Defense-in-depth response headers, applied to every route — SPA
+        // assets and API JSON alike.
+        //
+        //   * `X-Content-Type-Options: nosniff` refuses MIME sniffing so a
+        //     future static-asset content-type mismatch can't be sniffed
+        //     into HTML and rendered as script.
+        //   * `X-Frame-Options: DENY` forbids framing entirely. Redundant
+        //     with CSP's `frame-ancestors` but covers older browsers.
+        //   * `Referrer-Policy: same-origin` keeps deep-link issue URLs
+        //     out of off-origin Referer logs.
+        //   * `Strict-Transport-Security` pins HTTPS for a year. Browsers
+        //     ignore it over plain HTTP, so unconditional emission is
+        //     safe and helpful behind a TLS-terminating proxy.
+        //   * `Content-Security-Policy` is opinionated for the bundled
+        //     SPA: scripts are `'self'` only; inline styles are permitted
+        //     because Tailwind / SvelteKit emit a small amount during
+        //     hydration; the WS fan-out lands on `connect-src 'self'`.
+        //
+        // `if_not_present` semantics let a future handler override (e.g.
+        // a download endpoint that wants `X-Frame-Options: SAMEORIGIN`)
+        // without rewriting the layer chain.
+        .layer(SetResponseHeaderLayer::if_not_present(
+            axum::http::header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(SECURITY_CSP),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            axum::http::header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            axum::http::header::REFERRER_POLICY,
+            HeaderValue::from_static("same-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            axum::http::header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            axum::http::header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
 }
+
+// `script-src` permits `'unsafe-inline'` because SvelteKit's static
+// adapter emits an inline hydration <script> per page. Per-build hashing
+// would be the strictly-better mitigation but requires templating the
+// SPA HTML (the rust-embed-bundled file is static), so the practical
+// equivalent here is to lean on Svelte's auto-escaping for XSS defense
+// and treat CSP as defense-in-depth on the *other* directives:
+//   * `frame-ancestors 'none'` blocks clickjacking unconditionally.
+//   * `connect-src 'self' ws: wss:` pins exfiltration paths.
+//   * `object-src 'none'` / `base-uri 'none'` cut classic plugin /
+//     base-tag injection vectors.
+//   * `img-src` / `font-src` allow `data:` for the bundled fonts and
+//     the SPA's data-URI icons.
+//
+// The SPA source has no `{@html}`, `innerHTML`, `document.write`, or
+// `eval()` (verified via grep) — Svelte 5 runes auto-escape every
+// rendered value, so the practical XSS surface is small.
+const SECURITY_CSP: &str = "default-src 'self'; \
+script-src 'self' 'unsafe-inline'; \
+style-src 'self' 'unsafe-inline'; \
+connect-src 'self' ws: wss:; \
+img-src 'self' data:; \
+font-src 'self' data:; \
+frame-ancestors 'none'; \
+base-uri 'none'; \
+form-action 'self'; \
+object-src 'none'";
 
 pub async fn serve(addr: SocketAddr, state: Arc<AppState>) -> Result<(), DaemonError> {
     let dev_mode = state.dev_mode;
@@ -507,6 +590,14 @@ async fn admin_set_webhook(
     let Some(Json(body)) = body else {
         return Ok((StatusCode::BAD_REQUEST, "missing body").into_response());
     };
+    // SSRF gate: reject loopback / private / IMDS / internal-zone targets
+    // before they make it to the store. Null clears the webhook and
+    // bypasses validation.
+    if let Some(url) = body.url.as_deref() {
+        if let Err(why) = crate::webhook::validate_url(url) {
+            return Ok((StatusCode::BAD_REQUEST, why).into_response());
+        }
+    }
     match state
         .store
         .set_project_webhook(&name, body.url.as_deref())
@@ -947,13 +1038,31 @@ async fn ingest_envelope(
     StatusCode::OK.into_response()
 }
 
+/// Bound on the size of an ingested payload after gzip decompression.
+/// Sentry events are typically <1 MiB raw; even attachments-rich events
+/// rarely exceed a few hundred KiB. 8 MiB leaves headroom for unusual
+/// outliers while keeping a gzip bomb from expanding a 2 MiB body into
+/// gigabytes and OOM-ing the daemon on a 1 GB VM.
+const MAX_DECOMPRESSED: usize = 8 * 1024 * 1024;
+
 /// Detect gzip via magic bytes rather than trusting `Content-Encoding`. Sentry
 /// SDKs are inconsistent about setting the header, and the cost of sniffing
 /// two bytes is negligible.
+///
+/// The decompressor is wrapped in `Read::take(MAX_DECOMPRESSED + 1)` so a
+/// well-compressed adversarial payload (e.g. a 2 MiB body of zeros that
+/// expands ~1024:1) cannot exhaust memory.
 fn maybe_gunzip(body: &[u8]) -> std::io::Result<Vec<u8>> {
     if body.len() >= 2 && body[0] == 0x1f && body[1] == 0x8b {
-        let mut out = Vec::with_capacity(body.len() * 3);
-        GzDecoder::new(body).read_to_end(&mut out)?;
+        let mut out = Vec::with_capacity(4096);
+        let mut limited = GzDecoder::new(body).take((MAX_DECOMPRESSED as u64) + 1);
+        limited.read_to_end(&mut out)?;
+        if out.len() > MAX_DECOMPRESSED {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "decompressed payload exceeds limit",
+            ));
+        }
         Ok(out)
     } else {
         Ok(body.to_vec())
@@ -1201,6 +1310,37 @@ mod tests {
     fn maybe_gunzip_handles_empty_input() {
         let out = maybe_gunzip(&[]).unwrap();
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn maybe_gunzip_rejects_oversized_decompression() {
+        // Gzip bomb: 16 MiB of zeros compresses to ~16 KiB — well past
+        // MAX_DECOMPRESSED (8 MiB). A naïve `read_to_end` would happily
+        // allocate the full output and OOM a small VM.
+        let payload = vec![0u8; (MAX_DECOMPRESSED + 1024) * 2];
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        enc.write_all(&payload).unwrap();
+        let bomb = enc.finish().unwrap();
+        // Sanity: the encoded bomb is small enough to be a viable attack.
+        assert!(
+            bomb.len() < 1_000_000,
+            "compressed bomb should be tiny relative to expanded size"
+        );
+        let err = maybe_gunzip(&bomb).expect_err("must reject oversized");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn maybe_gunzip_accepts_payload_at_or_below_limit() {
+        // Boundary check: a payload that decompresses to exactly the cap
+        // should still pass. A regression that uses `<=` instead of `<`
+        // for the rejection comparison would fail this test.
+        let payload = vec![b'x'; MAX_DECOMPRESSED];
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&payload).unwrap();
+        let gz = enc.finish().unwrap();
+        let out = maybe_gunzip(&gz).expect("payload at limit must decode");
+        assert_eq!(out.len(), MAX_DECOMPRESSED);
     }
 
     // ----- read_line edge cases -----

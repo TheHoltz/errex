@@ -116,6 +116,9 @@ async fn fixture_full(
         // through a real browser; dev_mode keeps the cookie attribute set
         // simple so the helper-based assertion is stable.
         dev_mode: true,
+        // Trust XFF in tests so the existing lockout-by-IP fixtures keep
+        // exercising the same code path; production defaults the other way.
+        trust_proxy_headers: true,
         metrics: Arc::new(metrics::Metrics::new()),
         webhook_capacity: 8,
         webhook_sender: webhook_tx,
@@ -541,6 +544,28 @@ fn sample_envelope_body() -> Body {
 "#
     );
     Body::from(payload)
+}
+
+#[tokio::test]
+async fn ingest_rejects_body_above_size_limit() {
+    // The envelope route is hard-capped at 1 MiB raw input. Feeding a
+    // 2 MiB payload must short-circuit at the body-limit layer with 413
+    // before the gzip / parser layers ever see the bytes — otherwise an
+    // unauthenticated attacker could pump arbitrary memory through the
+    // request pipeline.
+    let (router, _store, _dir) = fixture_with_auth(false).await;
+    let oversized = vec![b'x'; 2 * 1024 * 1024];
+    let res = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/p/envelope/")
+                .body(Body::from(oversized))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 #[tokio::test]
@@ -1019,6 +1044,44 @@ async fn admin_set_webhook_with_null_clears() {
 }
 
 #[tokio::test]
+async fn admin_set_webhook_rejects_loopback_ssrf() {
+    // A hostile admin (or a hijacked admin cookie) could otherwise pivot
+    // the webhook delivery path to the daemon's own host or AWS IMDS.
+    // The validator must run BEFORE the URL hits the store, so a 400
+    // response and an unchanged DB row are both invariants of this test.
+    let (router, store, _dir) = fixture_with_admin(ADMIN_TOKEN).await;
+    let cookie = admin_cookie(&store).await;
+    store.create_project("p").await.unwrap();
+    for hostile in [
+        r#"{"url":"http://127.0.0.1:9090/hook"}"#,
+        r#"{"url":"http://169.254.169.254/latest/meta-data/"}"#,
+        r#"{"url":"http://10.0.0.1/x"}"#,
+        r#"{"url":"http://localhost/x"}"#,
+        r#"{"url":"file:///etc/passwd"}"#,
+        r#"{"url":"http://user:pass@example.com/x"}"#,
+    ] {
+        let res = admin_send(
+            &router,
+            "PUT",
+            "/api/admin/projects/p/webhook",
+            Some(&cookie),
+            hostile,
+        )
+        .await;
+        assert_eq!(
+            res.status(),
+            StatusCode::BAD_REQUEST,
+            "expected 400 for hostile webhook url: {hostile}",
+        );
+    }
+    let p = store.project_by_name("p").await.unwrap().unwrap();
+    assert!(
+        p.webhook_url.is_none(),
+        "rejected URLs must never reach the store"
+    );
+}
+
+#[tokio::test]
 async fn admin_set_webhook_returns_404_for_unknown_project() {
     let (router, store, _dir) = fixture_with_admin(ADMIN_TOKEN).await;
     let cookie = admin_cookie(&store).await;
@@ -1435,6 +1498,32 @@ async fn setup_returns_409_after_first_user_exists() {
         format!(r#"{{"token":"{ADMIN_TOKEN}","username":"daisy","password":"{STRONG_PW}"}}"#);
     let res = auth_send(&router, "/api/auth/setup", &body).await;
     assert_eq!(res.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn setup_locks_out_after_repeated_wrong_token() {
+    // Brute-forcing the setup token used to be unrate-limited — an
+    // attacker with network access during the install window could
+    // online-guess the operator's secret. The endpoint now reuses the
+    // login lockout policy, keyed on IP since there is no username yet.
+    let (router, _store, _dir) = fixture_with_admin(ADMIN_TOKEN).await;
+    let body = format!(r#"{{"token":"WRONG","username":"daisy","password":"{STRONG_PW}"}}"#);
+    let mut last = None;
+    // Hammer until the policy fires. The default LockoutPolicy IP cap
+    // is 20 within 15 minutes; well below 50 attempts so the loop is
+    // guaranteed to flip even if the threshold gets tightened.
+    for _ in 0..50 {
+        let res = auth_send(&router, "/api/auth/setup", &body).await;
+        last = Some(res.status());
+        if last == Some(StatusCode::TOO_MANY_REQUESTS) {
+            break;
+        }
+    }
+    assert_eq!(
+        last,
+        Some(StatusCode::TOO_MANY_REQUESTS),
+        "setup endpoint must rate-limit token brute-force"
+    );
 }
 
 #[tokio::test]
@@ -2045,6 +2134,107 @@ async fn ws_rejects_origin_mismatch_with_403() {
         }
         other => panic!("expected 403 http error, got {:?}", other),
     }
+}
+
+// ----- /api/* 404 -----
+//
+// Unknown `/api/*` paths must surface a JSON 404, not the SPA's index.html.
+// Otherwise a typo'd endpoint would return 200 + HTML and a JSON-expecting
+// caller would mis-parse it. The browser also gets a useful error instead
+// of leaking the SPA HTML to unauthenticated callers.
+
+#[tokio::test]
+async fn unknown_api_path_returns_json_404() {
+    let (router, _store, _dir) = fixture().await;
+    let res = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/this-endpoint-does-not-exist")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let ctype = res
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ctype.contains("application/json"),
+        "unknown /api/* must NOT return text/html (got {ctype})"
+    );
+}
+
+// ----- security headers -----
+//
+// Defense-in-depth headers must land on every response — SPA assets and
+// API JSON alike. Pinning each header makes a regression in the layer
+// stack a red bar instead of a silent reduction in security posture.
+
+#[tokio::test]
+async fn security_headers_set_on_health_response() {
+    let (router, _store, _dir) = fixture().await;
+    let res = router
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let h = res.headers();
+    assert_eq!(
+        h.get("x-content-type-options")
+            .and_then(|v| v.to_str().ok()),
+        Some("nosniff")
+    );
+    assert_eq!(
+        h.get("x-frame-options").and_then(|v| v.to_str().ok()),
+        Some("DENY")
+    );
+    assert_eq!(
+        h.get("referrer-policy").and_then(|v| v.to_str().ok()),
+        Some("same-origin")
+    );
+    assert!(h
+        .get("strict-transport-security")
+        .and_then(|v| v.to_str().ok())
+        .unwrap()
+        .contains("max-age="));
+    let csp = h
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())
+        .expect("CSP must be set");
+    assert!(csp.contains("default-src 'self'"));
+    assert!(csp.contains("frame-ancestors 'none'"));
+    assert!(csp.contains("object-src 'none'"));
+}
+
+#[tokio::test]
+async fn security_headers_set_on_api_json_response() {
+    let (router, store, _dir) = fixture().await;
+    let cookie = signed_in_cookie(&store, store::Role::Viewer).await;
+    let res = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/projects")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()
+            .get("x-content-type-options")
+            .and_then(|v| v.to_str().ok()),
+        Some("nosniff"),
+        "API responses must also carry security headers"
+    );
 }
 
 // ----- /health -----

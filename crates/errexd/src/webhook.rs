@@ -9,6 +9,7 @@
 //! Lightweight: a single shared `reqwest::Client` (HTTP/2 keepalive, rustls
 //! TLS) and one task. No per-call allocations beyond the JSON body.
 
+use std::net::IpAddr;
 use std::time::Duration;
 
 use errex_proto::{Issue, IssueStatus};
@@ -16,6 +17,89 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::store::Store;
+
+/// Validate a configured webhook URL before storing it. The webhook task
+/// will POST to whatever lands here, so this is the SSRF gate: a hostile
+/// admin (or hijacked admin cookie) that could otherwise pivot to AWS
+/// IMDS, GCP metadata, internal services on the same host, or RFC1918
+/// neighbors is rejected up front.
+///
+/// Checks (synchronous, no DNS to keep tests hermetic):
+///   * scheme must be `http` or `https`
+///   * URL must not embed userinfo (`http://user:pass@…`)
+///   * if the host is an IP literal, it must not be in a private,
+///     loopback, link-local, multicast, broadcast, or unspecified range
+///   * if the host is a name, common loopback / internal-zone TLDs are
+///     refused (`localhost`, `.local`, `.internal`, `.lan`, `.intranet`,
+///     `.corp`, `.home.arpa`)
+///
+/// Known limitation: a public hostname whose authoritative DNS returns
+/// an RFC1918 address (DNS rebinding) still slips through this check.
+/// Mitigation belongs in the delivery path (custom resolver pinning the
+/// validated IP) — flagged for follow-up.
+pub fn validate_url(raw: &str) -> Result<(), &'static str> {
+    let url = reqwest::Url::parse(raw).map_err(|_| "invalid url")?;
+    match url.scheme() {
+        "http" | "https" => {}
+        _ => return Err("scheme must be http or https"),
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("userinfo not allowed in webhook url");
+    }
+    let host = url.host_str().ok_or("missing host")?;
+    // host_str() returns IPv6 hosts wrapped in `[…]` literals; strip them
+    // so `parse::<IpAddr>()` recognises the address.
+    let host_for_parse = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = host_for_parse.parse::<IpAddr>() {
+        if ip_is_private_or_local(ip) {
+            return Err("private, loopback, or link-local addresses not allowed");
+        }
+        return Ok(());
+    }
+    let lower = host.to_ascii_lowercase();
+    if lower == "localhost" || hostname_in_internal_zone(&lower) {
+        return Err("loopback / internal-zone hostnames not allowed");
+    }
+    Ok(())
+}
+
+fn hostname_in_internal_zone(host: &str) -> bool {
+    const INTERNAL_SUFFIXES: &[&str] = &[
+        ".localhost",
+        ".local",
+        ".internal",
+        ".lan",
+        ".intranet",
+        ".corp",
+        ".home.arpa",
+    ];
+    INTERNAL_SUFFIXES.iter().any(|s| host.ends_with(s))
+}
+
+fn ip_is_private_or_local(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                // CGNAT 100.64.0.0/10 — common cloud carrier-internal range
+                || (v4.octets()[0] == 100 && (v4.octets()[1] & 0b1100_0000) == 64)
+        }
+        IpAddr::V6(v6) => {
+            let segs = v6.segments();
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                // unique local fc00::/7
+                || (segs[0] & 0xfe00) == 0xfc00
+                // link-local fe80::/10
+                || (segs[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
 
 /// What the digest task fires when a webhook-worthy event happens.
 #[derive(Debug, Clone)]
@@ -82,6 +166,12 @@ pub fn build_payload(t: &Trigger, public_url: &str) -> Value {
 pub async fn run(store: Store, public_url: String, mut rx: mpsc::Receiver<Trigger>) {
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
+        .connect_timeout(Duration::from_secs(2))
+        // Reject upstream redirects: a 30x to an internal address would
+        // re-do SSRF that the configured-URL validator just refused.
+        // Webhooks are best-effort fire-and-forget; followers can update
+        // their endpoint instead of relying on us to chase 302s.
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent(concat!("errexd/", env!("CARGO_PKG_VERSION")))
         .build()
     {
@@ -172,6 +262,97 @@ mod tests {
             first_seen: Utc::now(),
             last_seen: Utc::now(),
         }
+    }
+
+    // ----- validate_url -----
+    //
+    // SSRF gate. Each rejected case below is a real-world pivot we don't
+    // want a hostile (or hijacked) admin to be able to fire from the
+    // webhook config endpoint.
+
+    #[test]
+    fn validate_url_accepts_public_https() {
+        assert!(validate_url("https://hooks.slack.com/services/ABC/DEF").is_ok());
+        assert!(validate_url("https://discord.com/api/webhooks/x/y").is_ok());
+        assert!(validate_url("http://example.com:8080/hook").is_ok());
+    }
+
+    #[test]
+    fn validate_url_rejects_loopback_ipv4() {
+        assert!(validate_url("http://127.0.0.1/hook").is_err());
+        assert!(validate_url("http://127.0.0.1:9090/hook").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_aws_imds() {
+        // 169.254.169.254 — the most common cloud-metadata SSRF target.
+        assert!(validate_url("http://169.254.169.254/latest/meta-data/").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_rfc1918_ipv4() {
+        assert!(validate_url("http://10.0.0.1/").is_err());
+        assert!(validate_url("http://192.168.1.50/x").is_err());
+        assert!(validate_url("http://172.16.0.1/x").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_unspecified_and_broadcast() {
+        assert!(validate_url("http://0.0.0.0/").is_err());
+        assert!(validate_url("http://255.255.255.255/").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_loopback_ipv6() {
+        assert!(validate_url("http://[::1]/").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_unique_local_ipv6() {
+        assert!(validate_url("http://[fc00::1]/").is_err());
+        assert!(validate_url("http://[fd12:3456::1]/").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_link_local_ipv6() {
+        assert!(validate_url("http://[fe80::1]/").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_localhost_hostname() {
+        assert!(validate_url("http://localhost/x").is_err());
+        assert!(validate_url("http://localhost:9090/x").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_internal_zone_tlds() {
+        assert!(validate_url("http://api.internal/").is_err());
+        assert!(validate_url("http://server.local/").is_err());
+        assert!(validate_url("http://x.lan/").is_err());
+        assert!(validate_url("http://app.intranet/").is_err());
+        assert!(validate_url("http://a.b.localhost/").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_userinfo() {
+        assert!(validate_url("http://user:pass@example.com/").is_err());
+        assert!(validate_url("http://user@example.com/").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_non_http_schemes() {
+        assert!(validate_url("file:///etc/passwd").is_err());
+        assert!(validate_url("ftp://example.com/").is_err());
+        assert!(validate_url("gopher://example.com/").is_err());
+        // `data:` URIs would never reach here as a webhook, but a careless
+        // operator paste shouldn't be allowed to misconfigure either.
+        assert!(validate_url("data:text/plain,hi").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_unparseable_input() {
+        assert!(validate_url("not a url").is_err());
+        assert!(validate_url("").is_err());
     }
 
     #[test]

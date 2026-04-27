@@ -94,17 +94,33 @@ fn build_clearing_cookie(dev_mode: bool) -> String {
     format!("{COOKIE_NAME}=; HttpOnly{secure}; SameSite=Strict; Path=/; Max-Age=0")
 }
 
-/// Best-effort client-IP extractor. Order:
-///   1. `X-Forwarded-For` (first hop) — covers reverse-proxy deployments.
-///   2. `ConnectInfo<SocketAddr>` — direct connection IP.
-///   3. `"unknown"` — never observed in practice but the bucket key has
-///      to be stable, so we coalesce instead of returning Option.
-pub fn extract_client_ip(headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
-    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = xff.split(',').next() {
-            let trimmed = first.trim();
-            if !trimmed.is_empty() {
-                return trimmed.to_string();
+/// Best-effort client-IP extractor.
+///
+/// `trust_proxy_headers` controls whether `X-Forwarded-For` is honoured:
+///
+///   * `false` (default) — ignore XFF entirely; only the direct peer
+///     socket counts. Right default for a daemon reachable without an
+///     authenticated proxy in front: an attacker could otherwise spoof a
+///     fresh "IP" per request and bypass the per-IP lockout policy.
+///   * `true` — trust the first XFF hop. Use only when the daemon sits
+///     behind a reverse proxy that strips client-supplied XFF and
+///     re-writes a single trusted value.
+///
+/// Resolution order (with trust enabled): XFF first hop → peer → "unknown".
+/// "unknown" is a coalesce target — bucket keys must be stable strings, so
+/// Option is wrong here.
+pub fn extract_client_ip(
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+    trust_proxy_headers: bool,
+) -> String {
+    if trust_proxy_headers {
+        if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            if let Some(first) = xff.split(',').next() {
+                let trimmed = first.trim();
+                if !trimmed.is_empty() {
+                    return trimmed.to_string();
+                }
             }
         }
     }
@@ -191,7 +207,38 @@ pub async fn handle_setup(
         )
             .into_response());
     };
-    if body.token != expected {
+
+    // Per-IP lockout for setup-token brute-force. The endpoint exists for
+    // ~one operator click during install and is the highest-value secret
+    // we have, so a few wrong tries per window is more than enough.
+    // There is no username during setup, so the bucket is IP-only.
+    let setup_ip = extract_client_ip(&headers, peer.map(|c| c.0), state.trust_proxy_headers);
+    let policy = LockoutPolicy::default();
+    let since = Utc::now() - policy.window;
+    let ip_failures = state
+        .store
+        .count_recent_failures_for_ip(&setup_ip, since)
+        .await?;
+    if let Some(retry_after) = policy.evaluate(0, ip_failures).retry_after_secs() {
+        return Ok((
+            StatusCode::TOO_MANY_REQUESTS,
+            [(axum::http::header::RETRY_AFTER, retry_after.to_string())],
+            "too many attempts — try again later",
+        )
+            .into_response());
+    }
+
+    // Constant-time token compare so a network attacker can't time-leak
+    // the prefix of `expected`. Combined with the lockout above, the
+    // setup token has the brute-force resistance you'd expect of a real
+    // credential — `String` `==` short-circuits, which is exactly the
+    // wrong behaviour for a secret comparison.
+    use subtle::ConstantTimeEq;
+    let token_ok: bool = body.token.as_bytes().ct_eq(expected.as_bytes()).into();
+    if !token_ok {
+        // Record the failed attempt so the lockout window kicks in on the
+        // next try. `username = None` because there is no user yet.
+        state.store.record_attempt(None, &setup_ip, false).await;
         return Ok((StatusCode::UNAUTHORIZED, "invalid setup token").into_response());
     }
 
@@ -218,7 +265,7 @@ pub async fn handle_setup(
     // Sign the operator in immediately — they just proved they have host
     // access AND chose a password; making them re-type it would be silly.
     let id = crypto::generate_session_id();
-    let ip = extract_client_ip(&headers, peer.map(|c| c.0));
+    let ip = extract_client_ip(&headers, peer.map(|c| c.0), state.trust_proxy_headers);
     let ua = extract_user_agent(&headers);
     state
         .store
@@ -248,7 +295,7 @@ pub async fn handle_login(
         return Ok((StatusCode::BAD_REQUEST, "missing body").into_response());
     };
     let username = body.username.trim().to_string();
-    let ip = extract_client_ip(&headers, peer.map(|c| c.0));
+    let ip = extract_client_ip(&headers, peer.map(|c| c.0), state.trust_proxy_headers);
 
     // Lockout check: read the recent-failure ledger, decide, before doing
     // any password work. The hash compare is the expensive bit; gating it
@@ -447,33 +494,48 @@ mod tests {
     }
 
     #[test]
-    fn extract_client_ip_prefers_xff_over_peer() {
+    fn extract_client_ip_prefers_xff_when_proxy_trusted() {
         let mut h = HeaderMap::new();
         h.insert("x-forwarded-for", HeaderValue::from_static("1.2.3.4"));
         let peer: SocketAddr = "9.9.9.9:1234".parse().unwrap();
-        assert_eq!(extract_client_ip(&h, Some(peer)), "1.2.3.4");
+        assert_eq!(extract_client_ip(&h, Some(peer), true), "1.2.3.4");
     }
 
     #[test]
-    fn extract_client_ip_uses_first_xff_hop() {
+    fn extract_client_ip_uses_first_xff_hop_when_proxy_trusted() {
         let mut h = HeaderMap::new();
         h.insert(
             "x-forwarded-for",
             HeaderValue::from_static("1.2.3.4, 5.6.7.8"),
         );
-        assert_eq!(extract_client_ip(&h, None), "1.2.3.4");
+        assert_eq!(extract_client_ip(&h, None, true), "1.2.3.4");
+    }
+
+    /// The lockout-bypass scenario: an attacker rotates `X-Forwarded-For`
+    /// per request to look like a fresh "IP" each time. With proxy trust
+    /// off (the default) the daemon ignores XFF entirely and the per-IP
+    /// bucket sees only the real socket peer — so the lockout policy
+    /// holds.
+    #[test]
+    fn extract_client_ip_ignores_xff_when_proxy_untrusted() {
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", HeaderValue::from_static("1.2.3.4"));
+        let peer: SocketAddr = "9.9.9.9:1234".parse().unwrap();
+        assert_eq!(extract_client_ip(&h, Some(peer), false), "9.9.9.9");
     }
 
     #[test]
     fn extract_client_ip_falls_back_to_peer() {
         let h = HeaderMap::new();
         let peer: SocketAddr = "9.9.9.9:1234".parse().unwrap();
-        assert_eq!(extract_client_ip(&h, Some(peer)), "9.9.9.9");
+        assert_eq!(extract_client_ip(&h, Some(peer), false), "9.9.9.9");
+        assert_eq!(extract_client_ip(&h, Some(peer), true), "9.9.9.9");
     }
 
     #[test]
     fn extract_client_ip_falls_back_to_unknown_when_nothing() {
         let h = HeaderMap::new();
-        assert_eq!(extract_client_ip(&h, None), "unknown");
+        assert_eq!(extract_client_ip(&h, None, false), "unknown");
+        assert_eq!(extract_client_ip(&h, None, true), "unknown");
     }
 }
