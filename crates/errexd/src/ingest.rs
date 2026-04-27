@@ -783,15 +783,11 @@ async fn ingest_envelope(
         }
     };
 
-    // Telemetry: bump `last_used_at` for any successfully-parsed envelope,
-    // including session-only envelopes. The SPA reads this for the project
-    // header's "last event" line, so it must reflect SDK liveness regardless
-    // of whether ingest auth is enabled.
-    state.store.touch_project_used(&project).await;
-
     if events.is_empty() {
         // Sentry SDKs send envelopes that contain only sessions or
         // transactions; that's not an error, just nothing for us yet.
+        // Still bump telemetry — SDK is alive even if it sent no events.
+        state.store.touch_project_used(&project).await;
         return StatusCode::OK.into_response();
     }
 
@@ -805,10 +801,16 @@ async fn ingest_envelope(
             .await
             .is_err()
         {
+            // Digest receiver gone = shutting down. Don't bump telemetry
+            // for a request we didn't actually accept.
             return (StatusCode::SERVICE_UNAVAILABLE, "shutting down").into_response();
         }
     }
 
+    // Telemetry: SPA's project header reads `last_used_at` for the "last
+    // event" line, so it must reflect SDK liveness regardless of whether
+    // ingest auth is enabled. Bump only after the envelope was accepted.
+    state.store.touch_project_used(&project).await;
     StatusCode::OK.into_response()
 }
 
