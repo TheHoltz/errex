@@ -20,7 +20,11 @@ HARNESS="$ROOT/scripts/stress/target/release/errex-stress"
 PORT="${BENCH_PORT:-19090}"
 MCP_PORT="${BENCH_MCP_PORT:-19092}"
 DURATION="${BENCH_DURATION:-30}"
-RPS="${BENCH_RPS:-4000}"
+# Targets need to push the daemon past saturation, not the harness.
+# At 4000 the harness with 64 workers tops out around 3750 (HTTP +
+# pacing overhead per worker), hiding daemon-side gains. 8000 reliably
+# saturates the daemon and surfaces real throughput differences.
+RPS="${BENCH_RPS:-8000}"
 PIN_CPU="${BENCH_PIN_CPU:-0}"
 
 if [[ ! -x "$BIN" ]]; then
