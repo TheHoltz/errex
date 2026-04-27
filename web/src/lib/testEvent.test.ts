@@ -62,11 +62,33 @@ describe('sendTestEvent', () => {
     });
   });
 
-  it('returns { kind: "network", error } when fetch throws', async () => {
+  it('returns { kind: "network", error } when both the envelope fetch and the /health probe fail', async () => {
+    // mockRejectedValue (not mockRejectedValueOnce) → BOTH calls reject:
+    // first the envelope POST, then the /health probe. With the daemon
+    // genuinely unreachable, the helper falls through to the network kind.
     const boom = new TypeError('Failed to fetch');
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(boom);
 
     const result = await sendTestEvent(DSN);
     expect(result).toEqual({ kind: 'network', error: boom });
+  });
+
+  it('returns { kind: "blocked" } when the envelope fetch fails but a /health probe succeeds', async () => {
+    // Adblockers (uBlock Origin et al.) match `/api/*/envelope/*` against
+    // their Sentry rules and reject the request with the same TypeError as
+    // a real network failure. We disambiguate by probing /health on the
+    // same origin — that path has no Sentry signature and gets through.
+    const boom = new TypeError('Failed to fetch');
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockRejectedValueOnce(boom)
+      .mockResolvedValueOnce({ ok: true, status: 200 } as Response);
+
+    const result = await sendTestEvent(DSN);
+    expect(result).toEqual({ kind: 'blocked' });
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const probeUrl = fetch.mock.calls[1]![0];
+    expect(probeUrl).toBe('http://localhost:9090/health');
   });
 });

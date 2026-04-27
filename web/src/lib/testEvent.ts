@@ -6,6 +6,7 @@
 export type TestEventResult =
   | { kind: 'ok' }
   | { kind: 'http'; status: number; body: string }
+  | { kind: 'blocked' }
   | { kind: 'network'; error: unknown };
 
 const BODY_PREVIEW_LIMIT = 140;
@@ -34,6 +35,21 @@ export async function sendTestEvent(dsn: string): Promise<TestEventResult> {
       body: text.slice(0, BODY_PREVIEW_LIMIT),
     };
   } catch (error) {
+    // Adblockers commonly match `/api/*/envelope/*` (Sentry signature) and
+    // reject with the same TypeError as a real offline failure. Probe a
+    // signature-free endpoint on the same origin to disambiguate: if the
+    // daemon answers, the envelope was specifically blocked client-side.
+    if (await isDaemonReachable(dsn)) return { kind: 'blocked' };
     return { kind: 'network', error };
+  }
+}
+
+async function isDaemonReachable(dsn: string): Promise<boolean> {
+  try {
+    const probe = new URL('/health', dsn).toString();
+    const res = await fetch(probe, { method: 'GET', cache: 'no-store' });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
