@@ -52,10 +52,18 @@ use ingest::AppState;
 use store::Store;
 
 fn unique_tempdir() -> PathBuf {
+    // Atomic counter prevents same-nanosecond collisions across the ~140
+    // tests running in parallel in this binary. Two colliding paths would
+    // share a SQLite file and cause `UNIQUE constraint failed:
+    // _sqlx_migrations.version` on the second migrate.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let p = std::env::temp_dir().join(format!(
-        "errexd-api-{}-{}",
+        "errexd-api-{}-{}-{}",
         std::process::id(),
-        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        seq,
     ));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).expect("create tempdir");

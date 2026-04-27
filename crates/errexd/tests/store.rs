@@ -33,11 +33,17 @@ use store::{Role, Store};
 // ----- helpers -----
 
 fn unique_tempdir() -> PathBuf {
-    // PID + nanos so parallel cargo test workers don't collide.
+    // PID + nanos + atomic seq so parallel cargo test workers don't
+    // collide. Same-nanosecond starts (likely under heavy parallelism)
+    // would otherwise share a SQLite file and re-run migrations.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let p = std::env::temp_dir().join(format!(
-        "errexd-store-{}-{}",
+        "errexd-store-{}-{}-{}",
         std::process::id(),
-        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        seq,
     ));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).expect("create tempdir");
