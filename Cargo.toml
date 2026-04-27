@@ -23,7 +23,7 @@ futures-util = "0.3"
 axum = { version = "0.7", features = ["ws"] }
 tokio-tungstenite = "0.21"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
+tower-http = { version = "0.6", features = ["cors"] }
 hyper = "1"
 
 # Embedded SPA assets
@@ -77,7 +77,8 @@ password-hash = { version = "0.5", features = ["alloc"] }
 errex-proto = { path = "crates/errex-proto" }
 
 [profile.release]
-lto = "thin"
+opt-level = "z"
+lto = "fat"
 codegen-units = 1
 strip = true
 # `panic = "abort"` removes the unwind tables a daemon never uses
