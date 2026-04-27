@@ -1,5 +1,6 @@
 <script lang="ts">
   import { X } from 'lucide-svelte';
+  import { Button } from '$lib/components/ui/button';
   import { toast } from '$lib/toast.svelte';
   import { cn } from '$lib/utils';
 
@@ -38,25 +39,27 @@
         {/if}
       </div>
       {#if t.undo}
-        <button
-          type="button"
+        <Button
+          variant="link"
+          size="sm"
           onclick={() => {
             t.undo?.();
             toast.dismiss(t.id);
           }}
-          class="text-primary hover:underline shrink-0 font-medium"
+          class="h-auto shrink-0 p-0 font-medium"
         >
           Undo
-        </button>
+        </Button>
       {/if}
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="icon"
         aria-label="Close"
         onclick={() => toast.dismiss(t.id)}
-        class="text-muted-foreground hover:text-foreground shrink-0"
+        class="text-muted-foreground hover:text-foreground h-5 w-5 shrink-0"
       >
         <X class="h-3 w-3" />
-      </button>
+      </Button>
     </div>
   {/each}
 </div>

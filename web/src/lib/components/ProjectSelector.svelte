@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ChevronsUpDown, FolderKanban } from 'lucide-svelte';
+  import { Button } from '$lib/components/ui/button';
   import * as Popover from '$lib/components/ui/popover';
   import * as Tooltip from '$lib/components/ui/tooltip';
   import { cn } from '$lib/utils';
@@ -31,28 +32,30 @@
         <Tooltip.Root>
           <Tooltip.Trigger>
             {#snippet child({ props: tooltipProps })}
-              <button
+              <Button
                 {...props}
                 {...tooltipProps}
-                type="button"
-                class="text-muted-foreground hover:text-foreground hover:bg-accent inline-flex h-10 w-10 items-center justify-center rounded-md transition-colors data-[state=open]:bg-accent data-[state=open]:text-foreground"
+                variant="ghost"
+                size="icon"
+                class="text-muted-foreground hover:text-foreground h-10 w-10 data-[state=open]:bg-accent data-[state=open]:text-foreground"
                 aria-label="Switch project"
               >
                 <FolderKanban class="h-[18px] w-[18px]" />
-              </button>
+              </Button>
             {/snippet}
           </Tooltip.Trigger>
           <Tooltip.Content side="right">Project: {projects.current}</Tooltip.Content>
         </Tooltip.Root>
       {:else}
-        <button
+        <Button
           {...props}
-          type="button"
-          class="text-muted-foreground hover:text-foreground inline-flex items-center gap-1.5 text-[12px] tracking-tight transition-colors"
+          variant="ghost"
+          size="sm"
+          class="text-muted-foreground hover:text-foreground hover:bg-transparent h-auto gap-1.5 p-0 text-[12px] font-normal tracking-tight"
         >
           {projects.current}
           <ChevronsUpDown class="h-3.5 w-3.5" />
-        </button>
+        </Button>
       {/if}
     {/snippet}
   </Popover.Trigger>
@@ -60,11 +63,12 @@
     <ul class="flex flex-col">
       {#each items as item (item.value)}
         <li>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onclick={() => pick(item.value)}
             class={cn(
-              'hover:bg-accent flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-[12px]',
+              'h-auto w-full justify-between rounded-sm px-2 py-1.5 text-[12px] font-normal',
               item.value === projects.current && 'bg-accent/60 font-medium'
             )}
           >
@@ -72,7 +76,7 @@
             {#if item.count != null}
               <span class="text-muted-foreground tabular-nums text-[10px]">{item.count}</span>
             {/if}
-          </button>
+          </Button>
         </li>
       {/each}
     </ul>

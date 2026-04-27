@@ -1,8 +1,9 @@
 <script lang="ts">
   import { Ban, BellOff, Check, Flame } from 'lucide-svelte';
   import { actions } from '$lib/actions.svelte';
-  import { Badge } from '$lib/components/ui/badge';
   import * as Avatar from '$lib/components/ui/avatar';
+  import { Badge } from '$lib/components/ui/badge';
+  import { Button } from '$lib/components/ui/button';
   import * as Tooltip from '$lib/components/ui/tooltip';
   import { eventStream } from '$lib/eventStream.svelte';
   import type { Issue } from '$lib/types';
@@ -65,12 +66,12 @@
   const initial = $derived(assignee ? assignee[0]!.toUpperCase() : '');
 </script>
 
-<button
-  type="button"
+<Button
+  variant="ghost"
   onclick={() => onSelect?.(issue.id)}
   class={cn(
-    'relative flex min-h-[60px] w-full items-center gap-4 px-5 py-3 text-left transition-colors',
-    'hover:bg-accent border-b border-border/50',
+    'relative flex h-auto min-h-[60px] w-full justify-start gap-4 whitespace-normal rounded-none px-5 py-3 text-left text-[14px] font-normal',
+    'border-b border-border/50',
     "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:content-['']",
     railClass,
     selected && 'bg-accent/70',
@@ -155,4 +156,4 @@
   <span class="shrink-0 text-[12px] text-muted-foreground tabular-nums">
     {relativeTime(issue.last_seen)}
   </span>
-</button>
+</Button>

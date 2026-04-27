@@ -152,8 +152,25 @@ Do **not** open a PR or mark a task done if step 1 was skipped.
   `$effect`. No `export let`, no stores from `svelte/store`.
 - TypeScript strict; no `any`. Extend wire types in `lib/types.ts` to
   match `errex-proto` field-for-field.
-- Components compose shadcn-style primitives in `lib/components/ui/`;
-  feature components in `lib/components/`.
+- **shadcn primitives are the only UI vocabulary.** Feature components
+  in `lib/components/` and routes in `src/routes/` MUST compose the
+  primitives in `lib/components/ui/` (currently: avatar, badge, button,
+  card, checkbox, collapsible, dialog, input, label, popover, resizable,
+  select, separator, skeleton, tooltip). Specifically forbidden in
+  feature/route code:
+  - Raw `<button>` — use `Button` (variant=`ghost size=icon` for icon
+    buttons, `link` for inline text actions).
+  - Raw `<input>`, `<select>`, `<dialog>`, `<label>` — use the
+    corresponding primitive.
+  - DIY chrome that recreates a primitive's look (e.g.,
+    `rounded-full px-2 py-0.5 text-xs` for a badge, `rounded-md border
+    bg-card` for a card, `animate-pulse bg-muted` for a skeleton,
+    custom hover popovers).
+  - **Escape hatch:** if no primitive fits (kbd shortcut, code block,
+    flame graph, etc.), add a new primitive to `lib/components/ui/`
+    FIRST in the same PR, then consume it. Do not improvise inline.
+  - Pure layout elements (`div`, `section`, `nav`, `ul`, `table`, etc.)
+    and SVG/icon usage are not primitives and remain raw HTML.
 - Never reach for an in-memory cache in the frontend either — the WS
   socket plus REST is enough; bounded ring buffers if you need windowed
   state (see `eventStream.svelte.ts`).
@@ -171,6 +188,9 @@ Do **not** open a PR or mark a task done if step 1 was skipped.
   modules without also adding tests for them (per TDD rule above).
 - Don't add visual snapshot tests for components — they rot fast and
   catch nothing real at this size.
+- Don't bypass the shadcn primitive layer in feature components or
+  routes. If a primitive is missing, extend `lib/components/ui/`
+  instead of inlining the markup (see "Style — frontend").
 
 ## Quick references
 

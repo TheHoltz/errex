@@ -354,14 +354,15 @@
         Connection · DSN
       </Label>
       <DsnSnippet dsn={project.dsn} label={`DSN for ${project.name}`} />
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
         onclick={copyCurl}
-        class="text-muted-foreground hover:text-foreground inline-flex items-center gap-1.5 self-start text-[11px] transition-colors"
+        class="text-muted-foreground hover:text-foreground hover:bg-transparent h-auto self-start p-0 text-[11px] font-normal"
       >
         <ClipboardCopy class="h-3 w-3" />
         Copy a curl that sends a test event
-      </button>
+      </Button>
     </section>
 
     <Separator />

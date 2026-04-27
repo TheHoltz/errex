@@ -10,6 +10,7 @@
   } from 'lucide-svelte';
   import { goto } from '$app/navigation';
   import { auth } from '$lib/auth.svelte';
+  import { Badge } from '$lib/components/ui/badge';
   import { Button } from '$lib/components/ui/button';
   import { Dialog } from '$lib/components/ui/dialog';
   import { Input } from '$lib/components/ui/input';
@@ -170,20 +171,19 @@
       <div class="flex items-center gap-2">
         <h1 class="text-[18px] font-semibold tracking-tight">{user.username}</h1>
         {#if user.role === 'admin'}
-          <span
-            class="bg-amber-500/10 text-amber-400 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
-          >
+          <Badge variant="warning" class="gap-1 rounded-full px-2">
             <Shield class="h-3 w-3" /> admin
-          </span>
+          </Badge>
         {:else}
-          <span class="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-[11px]">
-            viewer
-          </span>
+          <Badge variant="secondary" class="rounded-full px-2">viewer</Badge>
         {/if}
         {#if user.deactivated_at}
-          <span class="bg-destructive/10 text-destructive rounded-full px-2 py-0.5 text-[11px]">
+          <Badge
+            variant="destructive"
+            class="bg-destructive/10 text-destructive rounded-full px-2"
+          >
             deactivated
-          </span>
+          </Badge>
         {/if}
         {#if isSelf}
           <span class="text-muted-foreground ml-1 text-[11px]">(you)</span>
