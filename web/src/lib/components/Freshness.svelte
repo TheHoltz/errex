@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { RefreshCw } from 'lucide-svelte';
+  import { Activity } from 'lucide-svelte';
   import * as Tooltip from '$lib/components/ui/tooltip';
   import { eventStream } from '$lib/eventStream.svelte';
   import { connection } from '$lib/stores.svelte';
@@ -31,17 +31,21 @@
   });
 </script>
 
+<!-- Status indicator, not a nav button. Smaller, no hover background — read,
+     not click. The Activity icon was picked over RefreshCw because RefreshCw
+     reads as "manual refresh action" and we already push events over WS. -->
 <Tooltip.Root>
   <Tooltip.Trigger
-    class="text-muted-foreground hover:text-foreground hover:bg-accent inline-flex h-10 w-10 items-center justify-center rounded-md transition-colors"
+    class="text-muted-foreground/70 inline-flex h-8 w-8 items-center justify-center rounded-md"
     aria-label={`Last event ${label}`}
   >
-    <RefreshCw
+    <Activity
       class={cn(
-        'h-[18px] w-[18px]',
+        'h-4 w-4',
         stale && 'opacity-50',
-        fresh && 'animate-pulse text-foreground'
+        fresh && 'text-foreground animate-pulse'
       )}
+      strokeWidth={1.75}
     />
   </Tooltip.Trigger>
   <Tooltip.Content side="right">

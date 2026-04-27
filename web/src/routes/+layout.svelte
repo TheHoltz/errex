@@ -16,6 +16,7 @@
   import ProjectSelector from '$lib/components/ProjectSelector.svelte';
   import Toaster from '$lib/components/Toaster.svelte';
   import { Button } from '$lib/components/ui/button';
+  import { Separator } from '$lib/components/ui/separator';
   import * as Tooltip from '$lib/components/ui/tooltip';
   import { toast } from '$lib/toast.svelte';
   import { cn } from '$lib/utils';
@@ -117,15 +118,18 @@
   {:else}
     <div class="flex h-screen">
       <aside
-        class="border-border bg-background flex w-14 shrink-0 flex-col items-center gap-3 border-r py-4"
+        class="border-border bg-background flex w-16 shrink-0 flex-col items-center gap-1.5 border-r py-3"
       >
+        <!-- Brand mark. Contained square so the orange reads as identity, not
+             alarm — keeps the active-nav rail as the only orange "you are
+             here" signal in the sidebar. -->
         <a
           href="/"
-          class="text-primary inline-flex h-10 w-10 items-center justify-center rounded-md"
+          class="bg-primary/10 text-primary hover:bg-primary/15 mb-2 inline-flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
           aria-label="errex"
           title="errex"
         >
-          <AlertCircle class="h-[18px] w-[18px]" />
+          <AlertCircle class="h-5 w-5" strokeWidth={2.25} />
         </a>
 
         <Tooltip.Root>
@@ -136,10 +140,10 @@
                 variant="ghost"
                 size="icon"
                 onclick={() => (paletteOpen = true)}
-                class="text-muted-foreground hover:text-foreground h-10 w-10"
+                class="text-muted-foreground hover:text-foreground h-10 w-10 rounded-lg"
                 aria-label="Search"
               >
-                <Search class="h-[18px] w-[18px]" />
+                <Search class="h-5 w-5" strokeWidth={1.75} />
               </Button>
             {/snippet}
           </Tooltip.Trigger>
@@ -155,12 +159,19 @@
                 {...props}
                 href="/projects"
                 class={cn(
-                  'text-muted-foreground hover:text-foreground hover:bg-accent inline-flex h-10 w-10 items-center justify-center rounded-md transition-colors',
+                  'text-muted-foreground hover:text-foreground hover:bg-accent relative inline-flex h-10 w-10 items-center justify-center rounded-lg transition-colors',
                   onProjectsRoute && 'bg-accent text-foreground'
                 )}
                 aria-label="Projects"
+                aria-current={onProjectsRoute ? 'page' : undefined}
               >
-                <Boxes class="h-[18px] w-[18px]" />
+                {#if onProjectsRoute}
+                  <span
+                    class="bg-primary absolute top-1/2 -left-3 h-5 w-0.5 -translate-y-1/2 rounded-r-full"
+                    aria-hidden="true"
+                  ></span>
+                {/if}
+                <Boxes class="h-5 w-5" strokeWidth={1.75} />
               </a>
             {/snippet}
           </Tooltip.Trigger>
@@ -175,12 +186,19 @@
                   {...props}
                   href="/team"
                   class={cn(
-                    'text-muted-foreground hover:text-foreground hover:bg-accent inline-flex h-10 w-10 items-center justify-center rounded-md transition-colors',
+                    'text-muted-foreground hover:text-foreground hover:bg-accent relative inline-flex h-10 w-10 items-center justify-center rounded-lg transition-colors',
                     onTeamRoute && 'bg-accent text-foreground'
                   )}
                   aria-label="Team"
+                  aria-current={onTeamRoute ? 'page' : undefined}
                 >
-                  <Users class="h-[18px] w-[18px]" />
+                  {#if onTeamRoute}
+                    <span
+                      class="bg-primary absolute top-1/2 -left-3 h-5 w-0.5 -translate-y-1/2 rounded-r-full"
+                      aria-hidden="true"
+                    ></span>
+                  {/if}
+                  <Users class="h-5 w-5" strokeWidth={1.75} />
                 </a>
               {/snippet}
             </Tooltip.Trigger>
@@ -188,7 +206,8 @@
           </Tooltip.Root>
         {/if}
 
-        <div class="mt-auto flex flex-col items-center gap-3">
+        <div class="mt-auto flex w-full flex-col items-center gap-1">
+          <Separator class="bg-border/60 mb-1 w-7" />
           <Freshness />
           <ConnectionStatus />
         </div>
@@ -196,7 +215,7 @@
 
       <div class="flex min-w-0 flex-1 flex-col">
         <header
-          class="border-border bg-background flex h-11 shrink-0 items-center gap-4 border-b px-5"
+          class="border-border bg-background flex h-11 shrink-0 items-center gap-3 border-b px-3"
         >
           {#if onProjectsRoute}
             <span class="text-muted-foreground inline-flex items-center text-[12px] tracking-tight">
@@ -222,9 +241,9 @@
             <span class="text-muted-foreground inline-flex items-center text-[12px] tracking-tight">
               <ProjectSelector variant="inline" />
               <span class="px-1.5 opacity-50">/</span>
-              Issues
+              <a href="/" class="hover:text-foreground transition-colors">Issues</a>
             </span>
-            <div class="bg-border h-4 w-px"></div>
+            <Separator orientation="vertical" class="h-4" />
             <HeaderStats />
           {/if}
 

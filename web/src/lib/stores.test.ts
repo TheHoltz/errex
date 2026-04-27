@@ -33,6 +33,8 @@ beforeEach(() => {
   filter.query = '';
   filter.statuses = new Set<IssueStatus>(['unresolved']);
   filter.levels = new Set<IssueLevel>();
+  filter.sinceMs = null;
+  filter.spikingOnly = false;
   projects.current = 'p';
   selection.issueId = null;
   selection.event = null;
@@ -124,6 +126,66 @@ describe('FilterStore.toggleLevel', () => {
     expect(filter.levels.has('error')).toBe(true);
     filter.toggleLevel('error');
     expect(filter.levels.has('error')).toBe(false);
+  });
+});
+
+describe('visibleIssues + sinceMs filter', () => {
+  const NOW = Date.parse('2026-04-27T12:00:00Z');
+
+  it('keeps every issue when sinceMs is null', () => {
+    issues.reset([
+      issue({ id: 1, first_seen: '2026-04-27T11:30:00Z', status: 'unresolved' }),
+      issue({ id: 2, first_seen: '2026-04-26T00:00:00Z', status: 'unresolved' })
+    ]);
+    filter.sinceMs = null;
+    expect(visibleIssues({ now: NOW }).map((i) => i.id).sort()).toEqual([1, 2]);
+  });
+
+  it('keeps only issues first seen within sinceMs of now', () => {
+    issues.reset([
+      issue({ id: 1, first_seen: '2026-04-27T11:30:00Z', status: 'unresolved' }), // 30 min old
+      issue({ id: 2, first_seen: '2026-04-27T10:30:00Z', status: 'unresolved' }), // 90 min old
+      issue({ id: 3, first_seen: '2026-04-27T11:59:30Z', status: 'unresolved' })  //  30s old
+    ]);
+    filter.sinceMs = 60 * 60 * 1000; // 1h
+    expect(visibleIssues({ now: NOW }).map((i) => i.id).sort()).toEqual([1, 3]);
+  });
+
+  it('drops issues with malformed first_seen when a since filter is active', () => {
+    issues.reset([
+      issue({ id: 1, first_seen: 'not-a-date', status: 'unresolved' }),
+      issue({ id: 2, first_seen: '2026-04-27T11:30:00Z', status: 'unresolved' })
+    ]);
+    filter.sinceMs = 60 * 60 * 1000;
+    expect(visibleIssues({ now: NOW }).map((i) => i.id)).toEqual([2]);
+  });
+});
+
+describe('visibleIssues + spikingOnly filter', () => {
+  it('passes through when spikingOnly is false', () => {
+    issues.reset([
+      issue({ id: 1, status: 'unresolved' }),
+      issue({ id: 2, status: 'unresolved' })
+    ]);
+    filter.spikingOnly = false;
+    expect(visibleIssues({ isSpiking: () => false }).map((i) => i.id).sort()).toEqual([1, 2]);
+  });
+
+  it('keeps only issues for which the predicate returns true', () => {
+    issues.reset([
+      issue({ id: 1, status: 'unresolved' }),
+      issue({ id: 2, status: 'unresolved' }),
+      issue({ id: 3, status: 'unresolved' })
+    ]);
+    filter.spikingOnly = true;
+    const isSpiking = (id: number) => id === 2;
+    expect(visibleIssues({ isSpiking }).map((i) => i.id)).toEqual([2]);
+  });
+
+  it('treats a missing predicate as nothing-spikes when spikingOnly is true', () => {
+    issues.reset([issue({ id: 1, status: 'unresolved' })]);
+    filter.spikingOnly = true;
+    expect(visibleIssues().map((i) => i.id)).toEqual([]);
   });
 });
 

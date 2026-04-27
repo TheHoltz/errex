@@ -17,6 +17,7 @@
   import { eventStream } from '$lib/eventStream.svelte';
   import { projects } from '$lib/stores.svelte';
   import { Button } from '$lib/components/ui/button';
+  import { Collapsible } from '$lib/components/ui/collapsible';
   import { Dialog } from '$lib/components/ui/dialog';
   import { Input } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
@@ -292,6 +293,11 @@
   // ----- delete ----------------------------------------------------------
   let deleteOpen = $state(false);
 
+  // Danger zone is collapsed by default — actions inside (rotate / delete)
+  // are once-per-project-lifetime; eating ~30% of the panel for them is
+  // disproportionate to use frequency.
+  let dangerOpen = $state(false);
+
   async function copyCurl() {
     const cmd = buildTestEventCurl(project.dsn);
     try {
@@ -306,8 +312,8 @@
 <div class="flex h-full flex-col overflow-y-auto">
   <div class="mx-auto flex w-full max-w-3xl flex-col gap-7 px-7 py-7">
     <!-- ----- Header strip ----- -->
-    <header class="flex flex-col gap-1.5">
-      <div class="flex items-center gap-2">
+    <header class="flex flex-col gap-2">
+      <div class="flex items-center gap-3">
         {#if renaming}
           <form
             class="flex flex-1 items-center gap-2"
@@ -321,9 +327,9 @@
               autocomplete="off"
               autofocus
               aria-label="New project name"
-              class="h-9 max-w-[280px] font-mono text-[14px]"
+              class="h-10 max-w-[320px] font-mono text-[18px]"
             />
-            <Button type="submit" size="sm" disabled={renameBusy} class="h-9">
+            <Button type="submit" size="sm" disabled={renameBusy} class="h-10">
               {#if renameBusy}
                 <Loader2 class="h-3.5 w-3.5 animate-spin" />
               {:else}
@@ -331,14 +337,16 @@
               {/if}
               Save
             </Button>
-            <Button type="button" variant="ghost" size="sm" onclick={cancelRename} class="h-9">
+            <Button type="button" variant="ghost" size="sm" onclick={cancelRename} class="h-10">
               <X class="h-3.5 w-3.5" />
             </Button>
           </form>
         {:else}
-          <h1 class="font-mono text-[18px] font-semibold tracking-tight">{project.name}</h1>
+          <h1 class="font-mono text-[24px] font-semibold leading-none tracking-tight">
+            {project.name}
+          </h1>
           <span
-            class={cn('h-2 w-2 rounded-full', status.tone)}
+            class={cn('h-2.5 w-2.5 rounded-full', status.tone)}
             title={status.label}
             aria-label={`status: ${status.label}`}
           ></span>
@@ -349,7 +357,7 @@
                   {...props}
                   variant="ghost"
                   size="icon"
-                  class="text-muted-foreground hover:text-foreground ml-1 h-7 w-7"
+                  class="text-muted-foreground hover:text-foreground ml-auto"
                   onclick={startRename}
                   aria-label="Rename project"
                 >
@@ -379,29 +387,53 @@
       <Label id="lbl-activity" class="text-muted-foreground text-[10px] uppercase tracking-wider">
         Activity · last 24h
       </Label>
-      <div class="grid grid-cols-3 gap-3">
-        <div class="border-border bg-card rounded-md border px-3 py-2.5">
-          <div class="text-[18px] font-semibold tabular-nums">
-            {stats ? stats.events_24h.toLocaleString() : '—'}
-          </div>
-          <div class="text-muted-foreground text-[11px]">events 24h</div>
+      {#if stats && stats.events_24h === 0}
+        <!-- First-event empty state. Shows up when the project has never seen
+             traffic; points the user at the primary onboarding CTA below. -->
+        <div class="border-border bg-card flex flex-col items-start gap-1.5 rounded-md border px-4 py-5">
+          <p class="text-[13px] font-medium">No events yet</p>
+          <p class="text-muted-foreground text-[12px]">
+            Paste the DSN below into your SDK or hit
+            <span class="text-foreground font-medium">Send test event</span>
+            to see your first one land here.
+          </p>
         </div>
-        <div class="border-border bg-card rounded-md border px-3 py-2.5">
-          <div class="text-[18px] font-semibold tabular-nums">
-            {#if stats?.last_event_at}{relativeTime(stats.last_event_at)}{:else}—{/if}
+      {:else}
+        <div class="border-border bg-card grid grid-cols-3 gap-0 overflow-hidden rounded-md border">
+          <!-- Primary tile: events 24h. Larger numeric + inline sparkline so the
+               headline metric carries the visual weight; the other two tiles
+               read as compact meta. -->
+          <div class="border-border col-span-2 flex flex-col gap-1.5 border-r px-4 py-3">
+            <div class="flex items-baseline gap-2">
+              <div class="text-[26px] font-semibold leading-none tabular-nums">
+                {stats ? stats.events_24h.toLocaleString() : '—'}
+              </div>
+              <div class="text-muted-foreground text-[11px] uppercase tracking-wider">
+                events 24h
+              </div>
+            </div>
+            <Sparkline values={sparkValues} width={520} height={32} accent class="w-full" />
           </div>
-          <div class="text-muted-foreground text-[11px]">last seen</div>
-        </div>
-        <div class="border-border bg-card rounded-md border px-3 py-2.5">
-          <div class="text-[18px] font-semibold tabular-nums">
-            {stats ? stats.unique_issues_24h.toLocaleString() : '—'}
+          <div class="flex flex-col">
+            <div class="border-border flex flex-col gap-0.5 border-b px-3 py-2">
+              <div class="text-[13px] font-medium tabular-nums">
+                {#if stats?.last_event_at}{relativeTime(stats.last_event_at)}{:else}—{/if}
+              </div>
+              <div class="text-muted-foreground text-[10px] uppercase tracking-wider">
+                last seen
+              </div>
+            </div>
+            <div class="flex flex-col gap-0.5 px-3 py-2">
+              <div class="text-[13px] font-medium tabular-nums">
+                {stats ? stats.unique_issues_24h.toLocaleString() : '—'}
+              </div>
+              <div class="text-muted-foreground text-[10px] uppercase tracking-wider">
+                unique issues
+              </div>
+            </div>
           </div>
-          <div class="text-muted-foreground text-[11px]">unique issues</div>
         </div>
-      </div>
-      <div class="border-border bg-card rounded-md border p-3">
-        <Sparkline values={sparkValues} width={520} height={48} accent class="w-full" />
-      </div>
+      {/if}
       {#if statsError}
         <p class="text-destructive text-[11px]">{statsError}</p>
       {/if}
@@ -462,7 +494,7 @@
           aria-label="Webhook URL"
           class="h-10 flex-1 text-[13px]"
         />
-        <Button variant="outline" onclick={saveWebhook} disabled={savingWebhook} class="h-10">
+        <Button onclick={saveWebhook} disabled={savingWebhook} class="h-10">
           {#if savingWebhook}<Loader2 class="h-4 w-4 animate-spin" />{:else}Save{/if}
         </Button>
         <Tooltip.Root>
@@ -470,7 +502,7 @@
             {#snippet child({ props })}
               <Button
                 {...props}
-                variant="ghost"
+                variant="outline"
                 size="icon"
                 class="h-10 w-10"
                 aria-label="Send a test event to this webhook"
@@ -488,6 +520,11 @@
           <Tooltip.Content side="left">Send a synthetic event to this URL</Tooltip.Content>
         </Tooltip.Root>
       </div>
+      <p class="text-muted-foreground/80 text-[11px]">
+        Slack: <span class="font-mono">hooks.slack.com/services/…</span>
+        · Discord: <span class="font-mono">discord.com/api/webhooks/…</span>
+        · Teams: <span class="font-mono">outlook.office.com/webhook/…</span>
+      </p>
       <p
         class={cn(
           'text-[11px]',
@@ -503,10 +540,23 @@
     <Separator />
 
     <!-- ----- Danger zone ----- -->
-    <section class="flex flex-col gap-3" aria-labelledby="lbl-danger">
-      <Label id="lbl-danger" class="text-destructive text-[10px] uppercase tracking-wider">
-        Danger zone
-      </Label>
+    <Collapsible
+      bind:open={dangerOpen}
+      class="gap-3"
+      triggerClass="px-1 py-1.5"
+      contentClass="mt-3 flex flex-col gap-3"
+    >
+      {#snippet header()}
+        <span
+          id="lbl-danger"
+          class="text-destructive text-[10px] uppercase tracking-wider"
+        >
+          Danger zone
+        </span>
+        <span class="text-muted-foreground/70 ml-2 text-[11px] normal-case tracking-normal">
+          rotate token · delete project
+        </span>
+      {/snippet}
 
       <div class="border-destructive/30 bg-destructive/5 flex items-center justify-between gap-3 rounded-md border p-3">
         <div class="flex flex-col gap-0.5">
@@ -516,11 +566,7 @@
             until you update them.
           </p>
         </div>
-        <Button
-          variant="outline"
-          onclick={openRotate}
-          class="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive shrink-0"
-        >
+        <Button variant="destructive" onclick={openRotate} class="shrink-0">
           <RotateCcw class="h-3.5 w-3.5" />
           Rotate
         </Button>
@@ -534,16 +580,12 @@
             Cannot be undone.
           </p>
         </div>
-        <Button
-          variant="outline"
-          onclick={() => (deleteOpen = true)}
-          class="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive shrink-0"
-        >
+        <Button variant="destructive" onclick={() => (deleteOpen = true)} class="shrink-0">
           <Trash2 class="h-3.5 w-3.5" />
           Delete
         </Button>
       </div>
-    </section>
+    </Collapsible>
   </div>
 </div>
 
