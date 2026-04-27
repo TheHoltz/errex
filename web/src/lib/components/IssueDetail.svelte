@@ -114,8 +114,10 @@
   </div>
 {:else}
   <div class="flex h-full flex-col">
-    <header class="flex flex-col gap-3 border-b border-border px-6 py-4">
-      <h1 class="text-[14px] font-semibold tracking-tight">{issue.title}</h1>
+    <header class="flex flex-col gap-2.5 border-b border-border px-3 py-3">
+      <h1 class="text-[15px] font-semibold leading-snug tracking-tight wrap-break-word">
+        {issue.title}
+      </h1>
 
       <div class="flex flex-wrap items-center gap-1.5">
         {#if issue.level}
@@ -172,20 +174,20 @@
         {/if}
       </p>
 
-      <div class="mt-2 flex items-center gap-1.5">
+      <div class="mt-1 flex items-center gap-1">
         <Tooltip.Root>
           <Tooltip.Trigger>
             {#snippet child({ props })}
               <Button
                 {...props}
                 variant="default"
-                size="icon"
-                class="h-9 w-9"
+                size="sm"
                 aria-label="Copy AI context"
                 onclick={onCopyAIContext}
                 disabled={eventLoading}
               >
                 <Bot class="h-4 w-4" />
+                AI context
               </Button>
             {/snippet}
           </Tooltip.Trigger>
@@ -202,7 +204,6 @@
                 {...props}
                 variant="ghost"
                 size="icon"
-                class="h-9 w-9"
                 aria-label={issue.status === 'resolved' ? 'Reopen' : 'Resolve'}
                 onclick={onResolve}
               >
@@ -227,7 +228,6 @@
                 {...props}
                 variant="ghost"
                 size="icon"
-                class="h-9 w-9"
                 aria-label={assignee === actions.me ? 'Unassign' : 'Assign to me'}
                 onclick={onAssign}
               >
@@ -245,7 +245,7 @@
           </Tooltip.Content>
         </Tooltip.Root>
 
-        <Separator orientation="vertical" class="mx-1 h-6" />
+        <Separator orientation="vertical" class="mx-2 h-5" />
 
         <Tooltip.Root>
           <Tooltip.Trigger>
@@ -254,7 +254,6 @@
                 {...props}
                 variant="ghost"
                 size="icon"
-                class="h-9 w-9"
                 aria-label={issue.status === 'muted' ? 'Reactivate' : 'Mute'}
                 onclick={onMute}
               >
@@ -279,7 +278,6 @@
                 {...props}
                 variant="ghost"
                 size="icon"
-                class="h-9 w-9"
                 aria-label="Copy link"
                 onclick={onCopyLink}
               >

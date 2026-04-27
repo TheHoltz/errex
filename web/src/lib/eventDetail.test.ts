@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { breadcrumbRelativeTime, dedupTags, partitionFrames } from './eventDetail';
+import {
+  breadcrumbRelativeTime,
+  dedupTags,
+  partitionFrames,
+  throwSiteIndex
+} from './eventDetail';
 import type { Frame } from './types';
 
 describe('dedupTags', () => {
@@ -71,5 +76,30 @@ describe('partitionFrames', () => {
 
   it('handles empty input', () => {
     expect(partitionFrames([])).toEqual({ inApp: 0, lib: 0 });
+  });
+});
+
+describe('throwSiteIndex', () => {
+  function frame(in_app: boolean | null | undefined, name = 'f'): Frame {
+    return { function: name, filename: 'a.ts', in_app };
+  }
+
+  it('returns the last in_app frame index', () => {
+    // Sentry orders frames oldest-first, so the throw site is the
+    // last in-app entry — that's the row the user wants pre-expanded.
+    const frames = [frame(false, 'lib1'), frame(true, 'app1'), frame(true, 'app2'), frame(false, 'lib2')];
+    expect(throwSiteIndex(frames)).toBe(2);
+  });
+
+  it('falls back to the last frame when no in_app frames exist', () => {
+    expect(throwSiteIndex([frame(false), frame(false)])).toBe(1);
+  });
+
+  it('returns -1 for empty input', () => {
+    expect(throwSiteIndex([])).toBe(-1);
+  });
+
+  it('treats null/undefined in_app as library frames for ranking', () => {
+    expect(throwSiteIndex([frame(null), frame(undefined), frame(true)])).toBe(2);
   });
 });

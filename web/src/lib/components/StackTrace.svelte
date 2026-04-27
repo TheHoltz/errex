@@ -1,13 +1,15 @@
 <script lang="ts">
   import { Layers } from 'lucide-svelte';
-  import { partitionFrames } from '$lib/eventDetail';
+  import { partitionFrames, throwSiteIndex } from '$lib/eventDetail';
   import StackFrame from './StackFrame.svelte';
   import type { Stack } from '$lib/types';
 
   type Props = { exception: Stack | null; loading?: boolean };
   let { exception, loading = false }: Props = $props();
 
-  const partition = $derived(partitionFrames(exception?.frames ?? []));
+  const frames = $derived(exception?.frames ?? []);
+  const partition = $derived(partitionFrames(frames));
+  const throwSite = $derived(throwSiteIndex(frames));
 </script>
 
 <section class="flex flex-col">
@@ -23,25 +25,19 @@
         </span>
       {/if}
     </h2>
-    {#if exception?.type || exception?.value}
-      <p class="mt-1 font-mono text-[12px]">
-        <span class="font-medium">{exception.type ?? ''}</span>
-        {#if exception.value}<span class="text-muted-foreground">: {exception.value}</span>{/if}
-      </p>
-    {/if}
   </header>
 
   {#if loading}
     <p class="text-muted-foreground px-3 py-4 text-[12px]">Loading stack…</p>
-  {:else if !exception || exception.frames.length === 0}
+  {:else if !exception || frames.length === 0}
     <p class="text-muted-foreground px-3 py-4 text-[12px]">
       No stack trace for the latest event.
     </p>
   {:else}
     <ol class="flex flex-col">
-      {#each exception.frames as frame, i (i)}
+      {#each frames as frame, i (i)}
         <li>
-          <StackFrame {frame} />
+          <StackFrame {frame} anchor={i === throwSite} />
         </li>
       {/each}
     </ol>

@@ -17,7 +17,7 @@
     Tags
   </h2>
   {#if entries.length === 0}
-    <p class="text-muted-foreground mt-1 text-[12px]">Sem tags neste evento.</p>
+    <p class="text-muted-foreground mt-1 text-[12px]">No tags on this event.</p>
   {:else}
     <ul class="mt-2 flex flex-wrap gap-1.5">
       {#each entries as [k, v] (k)}

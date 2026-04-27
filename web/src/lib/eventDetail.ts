@@ -122,3 +122,18 @@ export function partitionFrames(frames: Frame[]): { inApp: number; lib: number }
   }
   return { inApp, lib };
 }
+
+/**
+ * Index of the "throw site" — the frame the eye should land on first.
+ * Sentry orders frames oldest-first, so the innermost call (= where the
+ * exception was raised) is the last in_app frame. If none are flagged
+ * in_app we fall back to the last frame so we still pre-expand something
+ * useful instead of leaving the trace fully collapsed.
+ */
+export function throwSiteIndex(frames: Frame[]): number {
+  if (frames.length === 0) return -1;
+  for (let i = frames.length - 1; i >= 0; i -= 1) {
+    if (frames[i]?.in_app === true) return i;
+  }
+  return frames.length - 1;
+}
