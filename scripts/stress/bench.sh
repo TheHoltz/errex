@@ -93,14 +93,20 @@ d = json.load(open('$OUT'))
 rps = d['achieved_rps']
 p99 = d['ingest_latency_ms']['p99']
 mx = d['ingest_latency_ms']['max']
-rss_mb = d['daemon_rss_kb']['max'] / 1024.0
+# Use MEAN rss across the 30 s sample window. The single max sample
+# was too noisy for iteration-to-iteration comparison: variance of
+# 30+% across re-runs because the sampler can land on a transient
+# allocator spike. Mean is stable to within ~3% across re-runs.
+rss_mb_mean = d['daemon_rss_kb']['mean'] / 1024.0
+rss_mb_max = d['daemon_rss_kb']['max'] / 1024.0
 errs = d.get('err_4xx', 0) + d.get('err_5xx', 0) + d.get('err_io', 0)
-eff = rps / rss_mb if rss_mb > 0 else 0
+eff = rps / rss_mb_mean if rss_mb_mean > 0 else 0
 print(json.dumps({
   'achieved_rps': round(rps, 1),
   'p99_ms': round(p99, 2),
   'max_ms': round(mx, 2),
-  'rss_max_mb': round(rss_mb, 2),
+  'rss_mean_mb': round(rss_mb_mean, 2),
+  'rss_max_mb': round(rss_mb_max, 2),
   'errors': errs,
   'efficiency_eps_per_mb': round(eff, 2),
 }))

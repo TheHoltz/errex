@@ -349,8 +349,11 @@ impl Store {
         let mut results = Vec::with_capacity(batch.len());
 
         for input in batch {
-            let now_str = input.now.to_rfc3339();
             let fp_str = input.fp.as_str();
+            // Bind `DateTime<Utc>` directly via sqlx's chrono integration;
+            // saves the per-event RFC3339 String allocation that
+            // `to_rfc3339()` produces. SQLite still stores ISO-8601 TEXT.
+            let now = input.now;
 
             let inserted = sqlx::query(
                 "INSERT INTO issues (project, fingerprint, title, culprit, level, status, \
@@ -363,8 +366,8 @@ impl Store {
             .bind(input.title)
             .bind(input.culprit)
             .bind(input.level)
-            .bind(&now_str)
-            .bind(&now_str)
+            .bind(now)
+            .bind(now)
             .execute(&mut *tx)
             .await?
             .rows_affected();
@@ -387,7 +390,7 @@ impl Store {
                          SET event_count = event_count + 1, last_seen = ?, status = 'unresolved' \
                          WHERE project = ? AND fingerprint = ?",
                     )
-                    .bind(&now_str)
+                    .bind(now)
                     .bind(input.project)
                     .bind(fp_str)
                     .execute(&mut *tx)
@@ -397,7 +400,7 @@ impl Store {
                         "UPDATE issues SET event_count = event_count + 1, last_seen = ? \
                          WHERE project = ? AND fingerprint = ?",
                     )
-                    .bind(&now_str)
+                    .bind(now)
                     .bind(input.project)
                     .bind(fp_str)
                     .execute(&mut *tx)
