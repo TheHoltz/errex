@@ -77,6 +77,46 @@ explicitly in the log entry before implementing.
 
 ---
 
+## Final summary (plateau reached, iter 10)
+
+**Termination triggered:** 3 consecutive iterations with efficiency delta
+< +2% over running best (iter 8 +1.9%, iter 9 reverted, iter 10 reverted).
+
+**Final running best: efficiency 421.72** (median of 3 bench runs).
+- 7399 achieved RPS (8000 target, 1 CPU, single-writer SQLite)
+- p99 ingest latency: 8.46 ms
+- max ingest latency: 130 ms (under 500 ms gate)
+- mean RSS: 17.93 MB
+- max RSS: 30.85 MB
+- 0 errors
+
+**Improvement over the iter-0 baseline:** unfair direct compare because
+both the metric (rss_max → rss_mean) and the bench load point (rps_4000
+→ rps_8000) changed during the loop to surface real signal. Honest
+breakdown of what landed:
+
+| iter | change                                  | kept? |
+|---:|------------------------------------------|-------|
+| 0  | baseline measurement                       | n/a   |
+| 1  | pre-serialize JSON + event_id in handler   | YES   |
+| 2  | multi-row event INSERT                     | revert |
+| 3  | `synchronous=OFF`                          | YES   |
+| 4  | bench target 4000→8000 (methodology)        | n/a   |
+| 5  | bind `DateTime<Utc>` directly               | YES   |
+| 6  | efficiency = rps / rss_mean (methodology)   | n/a   |
+| 7  | `BATCH_SIZE` 32→64                         | revert |
+| 8  | `BATCH_SIZE` 32→16                         | YES (+1.9%) |
+| 9  | store raw wire bytes                       | revert |
+| 10 | `current_thread` runtime                   | revert |
+
+**Recommended next architectural step (if user wants to push past
+this):** project-sharded SQLite — each project gets its own DB file
+and its own digest task. Today's single-writer-per-process invariant
+is the structural ceiling. Sharding breaks "single binary, one DB" so
+it requires explicit user approval per the loop's hard rules. Until
+that approval lands, 421.72 is the achievable plateau on one CPU
+under the current architecture.
+
 ## Iterations
 
 ### Iteration 0 — baseline
@@ -91,6 +131,47 @@ explicitly in the log entry before implementing.
   collapses to 18.83 ms — the 1 s outlier was scheduler / WSL2 noise,
   not a WAL checkpoint stall. Tail-latency optimization (hypothesis 3
   in the bank) is now low priority unless it resurfaces.
+
+### Iteration 10 — `tokio` `current_thread` runtime (REVERTED)
+
+- **hypothesis (new):** under `taskset -c 0` the multi-thread runtime
+  spawns N worker threads that all share one CPU and only add
+  context-switch + thread-sync overhead. A single-threaded scheduler
+  matches the actual hardware available.
+- **changed:** `crates/errexd/src/main.rs` — `#[tokio::main(flavor =
+  "multi_thread")]` → `current_thread`.
+- **bench (3 runs):** efficiency 422.07 / 407.28 / 410.91 — median
+  410.91.
+- **delta vs running best (421.72):** -2.6%.
+- **decision:** REVERTED via `git restore .`.
+- **notes:** Counter to expectation. multi-thread keeps the digest
+  task on its own scheduler thread and lets HTTP handlers parallelize
+  parse + send work — even with one CPU the runtime can hide some
+  blocking IO via thread switches. Single-thread serializes
+  everything in one event loop and the harness numbers slid.
+
+### Iteration 9 — store raw wire bytes instead of re-serializing (REVERTED)
+
+- **hypothesis (new):** `digest::prepare()` does
+  `serde_json::to_string(&event)` per event to produce the storage
+  payload. The wire bytes from `parse_envelope` are already valid
+  UTF-8 JSON; reusing them saves the serialize AND preserves any
+  unknown SDK fields the daemon's `Event` type drops on parse.
+- **changed:** `parse_envelope` returns `Vec<(Event, Vec<u8>)>`;
+  `prepare` takes a third `raw_payload: Vec<u8>` arg and stores it
+  via `String::from_utf8`.
+- **bench (3 runs):** efficiency 406.37 / 407.14 / 381.84 — median
+  406.37.
+- **delta vs running best (421.72):** -3.6%.
+- **decision:** REVERTED.
+- **notes:** Theoretically should win — saves one serialize per
+  event. In practice the change introduces TWO new allocs per event
+  (`payload.to_vec()` in the parser plus `String::from_utf8` in the
+  handler — at minimum one allocation for the Vec→String path),
+  and the savings on `serde_json::to_string` of a small struct
+  (~300 bytes here) didn't outweigh them. May matter at larger
+  payload sizes, but at the bench's 8-frame profile the math goes
+  the other way.
 
 ### Iteration 8 — `BATCH_SIZE` 32 → 16
 
