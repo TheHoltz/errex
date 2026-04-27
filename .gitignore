@@ -1,0 +1,28 @@
+# Build artifacts
+/target
+/data
+*.db
+*.db-shm
+*.db-wal
+
+# Dependencies
+/node_modules
+web/node_modules
+
+# SvelteKit / Vite output
+web/.svelte-kit
+web/build
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*~
+.vscode
+.idea
+
+# Local Claude Code / harness state — not for the public repo
+.claude/scheduled_tasks.lock
+.superpowers
+
+# Local docker-compose overrides
+docker-compose.override.yml

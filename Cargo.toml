@@ -1,0 +1,79 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/errex-proto",
+    "crates/errexd",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+rust-version = "1.75"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.38", features = ["full"] }
+futures-util = "0.3"
+
+# HTTP / WebSocket
+axum = "0.7"
+tokio-tungstenite = "0.21"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
+hyper = "1"
+
+# Embedded SPA assets
+rust-embed = { version = "8", features = ["mime-guess", "interpolate-folder-path"] }
+mime_guess = "2"
+
+# Outbound webhook deliveries. Minimal reqwest: rustls-tls for HTTPS to
+# Slack/Discord/Teams without dragging in OpenSSL, plus the JSON helper.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
+
+# Storage
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+    "macros",
+    "migrate",
+    "chrono",
+] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Compression (Sentry envelopes are commonly gzipped)
+flate2 = "1"
+
+# Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Errors
+thiserror = "1"
+anyhow = "1"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Misc
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Auth
+# argon2id for password hashing — small, no external C deps, OWASP-blessed
+# defaults. We don't add the rand dep separately because argon2's default
+# rng (`OsRng`) covers session id generation too via the `password-hash`
+# crate it re-exports.
+argon2 = "0.5"
+password-hash = { version = "0.5", features = ["alloc"] }
+
+# Internal
+errex-proto = { path = "crates/errex-proto" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -1,0 +1,124 @@
+@import 'tailwindcss';
+
+/* JetBrains Mono everywhere — sans and mono both. The variable font (`wght`
+ * axis only — no italics shipped) covers weights 100–800 from a single
+ * file per subset. Browsers only fetch the subset they need at runtime
+ * thanks to the unicode-range declarations Fontsource bakes in. Bundled by
+ * Vite so there are zero external requests. */
+@import '@fontsource-variable/jetbrains-mono/wght.css';
+
+/* shadcn-svelte semantic tokens, dark-first.
+ * Brand accent is burnt orange (#ff8c42) — overrides shadcn's default primary.
+ * Light mode tokens are kept for the future toggle but unused today.
+ */
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-ring: hsl(var(--ring));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  /* Both sans and mono resolve to JetBrains Mono. The fallbacks kick in only
+   * if the woff2 fails to load (e.g. blocked by extension). */
+  --font-sans: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco,
+    Consolas, monospace;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco,
+    Consolas, monospace;
+}
+
+:root {
+  --background: 0 0% 100%;
+  --foreground: 0 0% 9%;
+  --muted: 0 0% 96%;
+  --muted-foreground: 0 0% 45%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 9%;
+  --card: 0 0% 100%;
+  --card-foreground: 0 0% 9%;
+  --border: 0 0% 89%;
+  --input: 0 0% 89%;
+  --primary: 22 94% 53%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 0 0% 96%;
+  --secondary-foreground: 0 0% 9%;
+  --accent: 0 0% 96%;
+  --accent-foreground: 0 0% 9%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 98%;
+  --ring: 22 94% 53%;
+  --radius: 0.5rem;
+}
+
+:root.dark {
+  --background: 0 0% 7%;
+  --foreground: 0 0% 95%;
+  --muted: 0 0% 13%;
+  --muted-foreground: 0 0% 63%;
+  --popover: 0 0% 9%;
+  --popover-foreground: 0 0% 95%;
+  --card: 0 0% 9%;
+  --card-foreground: 0 0% 95%;
+  --border: 0 0% 16%;
+  --input: 0 0% 16%;
+  --primary: 22 94% 63%;
+  --primary-foreground: 0 0% 9%;
+  --secondary: 0 0% 13%;
+  --secondary-foreground: 0 0% 95%;
+  --accent: 0 0% 16%;
+  --accent-foreground: 0 0% 95%;
+  --destructive: 0 72% 56%;
+  --destructive-foreground: 0 0% 98%;
+  --ring: 22 94% 63%;
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  html,
+  body {
+    height: 100%;
+  }
+  html {
+    /* Mono glyphs render wider than the equivalent sans, so we drop a hair
+     * and let the dev-tool density still feel right at this size. */
+    font-size: 12px;
+  }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-sans);
+    font-feature-settings:
+      'liga' 1,
+      'calt' 1,
+      'zero' 1,
+      'ss02' 1;
+    /* JetBrains Mono is geometrically wide; -0.005em pulls inline text in a
+     * touch without affecting code blocks where width is the point. */
+    letter-spacing: -0.005em;
+  }
+  code,
+  pre,
+  kbd,
+  samp {
+    font-family: var(--font-mono);
+  }
+}

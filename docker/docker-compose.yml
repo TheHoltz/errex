@@ -1,0 +1,18 @@
+services:
+  errexd:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: errexd:latest
+    container_name: errexd
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+      - "9091:9091"
+      - "9092:9092"
+    volumes:
+      - ../data:/data
+    environment:
+      ERREXD_DATA_DIR: /data
+      ERREXD_LOG_LEVEL: info
+      ERREXD_ADMIN_TOKEN: ${ERREXD_ADMIN_TOKEN:-123}

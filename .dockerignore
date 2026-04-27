@@ -1,0 +1,19 @@
+target
+data
+.git
+.gitignore
+README.md
+docker-compose.override.yml
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+
+# Heavy intermediates that the Dockerfile re-creates from scratch — never
+# worth shipping into the build context. We deliberately do NOT exclude
+# `web/build`: with `--build-arg SKIP_WEB_BUILD=true` you can pre-build the
+# SPA on the host (handy when Docker Desktop's engine RAM is tight) and the
+# Dockerfile picks up the artifacts straight from the context. A normal
+# build re-generates `web/build` inside the bun stage anyway.
+web/node_modules
+web/.svelte-kit

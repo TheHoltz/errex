@@ -1,0 +1,1084 @@
+//! HTTP ingest + browser-facing API server.
+//!
+//! Serves three categories of routes off port 9090:
+//!   - `/health`, `/api/:project/envelope/`     — operations + Sentry SDK ingest
+//!   - `/api/projects`, `/api/issues`           — JSON for the SPA
+//!   - everything else                          — embedded SvelteKit SPA
+//!
+//! Routing is intentionally flat so it's easy to add `/api/<project>/store/`
+//! and similar Sentry endpoints later.
+
+use std::io::Read;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use axum::body::Bytes;
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderValue, Method, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use errex_proto::{Event, ProtoError};
+use flate2::read::GzDecoder;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use tokio::net::TcpListener;
+use tokio::sync::mpsc;
+use tower_http::cors::CorsLayer;
+
+use crate::digest::IngestEvent;
+use crate::error::DaemonError;
+use crate::rate_limit::RateLimiter;
+use crate::spa;
+use crate::store::Store;
+
+#[derive(Debug)]
+pub struct AppState {
+    pub events: mpsc::Sender<IngestEvent>,
+    pub store: Store,
+    /// Fanout sender shared with the WS server. Mutating endpoints
+    /// (`PUT /status`) push `IssueUpdated` here so every connected client
+    /// converges to the new state without polling.
+    pub fanout: tokio::sync::broadcast::Sender<errex_proto::ServerMessage>,
+    /// When true, ingest validates a `sentry_key` against the `projects`
+    /// table. Off by default for self-host pequeno behind a private net.
+    pub require_auth: bool,
+    /// Per-project token bucket. A `RateLimiter` constructed with
+    /// `per_min == 0` is a no-op, so callers don't branch on enabled.
+    pub rate_limiter: Arc<RateLimiter>,
+    /// One-shot setup secret consumed by `/api/auth/setup` while the
+    /// `users` table is empty. After the first user exists, this value is
+    /// effectively dead — the setup endpoint refuses to fire again. Wired
+    /// through `ERREXD_ADMIN_TOKEN` for upgrade compatibility with the
+    /// previous bearer-auth deployment.
+    pub setup_token: Option<String>,
+    /// Public-facing URL for this daemon. Embedded in DSNs returned to the
+    /// SPA so SDKs configured by users land on the right host.
+    pub public_url: String,
+    /// True when the operator started the daemon with `ERREXD_DEV_MODE`.
+    /// Relaxes cookie security flags so cookies issued over `http://`
+    /// localhost are accepted by browsers (which refuse `Secure` over
+    /// non-https).
+    pub dev_mode: bool,
+}
+
+/// Build the API router without binding a listener. Extracted so tests can
+/// drive it via `tower::ServiceExt::oneshot` without spinning up a port.
+pub fn build_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .route("/api/:project/envelope/", post(ingest_envelope))
+        .route("/api/projects", get(list_projects))
+        .route("/api/issues", get(list_issues))
+        .route("/api/issues/:id/event", get(latest_event))
+        .route("/api/issues/:id/status", axum::routing::put(put_status))
+        // ----- auth -----
+        .route("/api/auth/setup", post(crate::auth::handle_setup))
+        .route(
+            "/api/auth/setup-status",
+            get(crate::auth::handle_setup_status),
+        )
+        .route("/api/auth/login", post(crate::auth::handle_login))
+        .route("/api/auth/logout", post(crate::auth::handle_logout))
+        .route("/api/auth/me", get(crate::auth::handle_me))
+        // ----- admin -----
+        .route(
+            "/api/admin/projects",
+            get(admin_list_projects).post(admin_create_project),
+        )
+        .route(
+            "/api/admin/projects/:name",
+            axum::routing::patch(admin_rename_project).delete(admin_delete_project),
+        )
+        .route(
+            "/api/admin/projects/:name/webhook",
+            axum::routing::put(admin_set_webhook),
+        )
+        .route("/api/admin/projects/:name/rotate", post(admin_rotate_token))
+        .route(
+            "/api/admin/projects/:name/activity",
+            get(admin_project_activity),
+        )
+        .route(
+            "/api/admin/projects/:name/destroy-preview",
+            get(admin_destroy_preview),
+        )
+        // ----- admin: users -----
+        .route(
+            "/api/admin/users",
+            get(admin_list_users).post(admin_create_user),
+        )
+        .route(
+            "/api/admin/users/:u",
+            get(admin_get_user)
+                .patch(admin_patch_user)
+                .delete(admin_delete_user),
+        )
+        .route(
+            "/api/admin/users/:u/sessions",
+            get(admin_list_user_sessions),
+        )
+        .route(
+            "/api/admin/users/:u/sessions/revoke-all",
+            post(admin_revoke_user_sessions),
+        )
+        .with_state(state)
+        .fallback(spa::handler)
+}
+
+pub async fn serve(addr: SocketAddr, state: Arc<AppState>) -> Result<(), DaemonError> {
+    let dev_mode = state.dev_mode;
+    let mut app = build_router(state);
+
+    if dev_mode {
+        // Permit the Vite dev server origin so `bun run dev` on :5173 can
+        // call the daemon directly without proxying. In production the SPA
+        // is served from this same origin and CORS is irrelevant.
+        let cors = CorsLayer::new()
+            .allow_origin(
+                "http://localhost:5173"
+                    .parse::<HeaderValue>()
+                    .expect("static origin"),
+            )
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+            .allow_headers(tower_http::cors::Any);
+        app = app.layer(cors);
+        tracing::info!("dev mode: CORS enabled for http://localhost:5173");
+    }
+
+    let listener = TcpListener::bind(addr).await?;
+    tracing::info!("http server bound to {addr}");
+    // `into_make_service_with_connect_info` populates the per-request
+    // `ConnectInfo<SocketAddr>` extension that the auth handlers use to
+    // bucket lockout state by client IP.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(DaemonError::Io)?;
+    Ok(())
+}
+
+async fn health() -> impl IntoResponse {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn list_projects(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<crate::store::ProjectSummary>>, ApiError> {
+    // One round-trip with GROUP BY beats loading every issue and counting
+    // in the handler. Self-host pequeno may have thousands of issues; we
+    // don't want to materialize them all just to return four numbers.
+    let projects = state.store.project_summaries().await?;
+    Ok(Json(projects))
+}
+
+#[derive(Debug, Deserialize)]
+struct IssueQuery {
+    project: Option<String>,
+}
+
+async fn list_issues(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<IssueQuery>,
+) -> Result<Json<Vec<errex_proto::Issue>>, ApiError> {
+    let issues = match q.project {
+        Some(project) => state.store.list_issues_by_project(&project).await?,
+        None => state.store.load_issues().await?,
+    };
+    Ok(Json(issues))
+}
+
+/// PUT /api/issues/:id/status — sets triage status. The body is
+/// `{"status": "unresolved" | "resolved" | "muted" | "ignored"}`. Unknown
+/// statuses return 400 (caught by the strict serde enum); unknown ids
+/// return 404 via the `NotFound` arm of `DaemonError`.
+#[derive(Debug, serde::Deserialize)]
+struct StatusBody {
+    status: errex_proto::IssueStatus,
+}
+
+async fn put_status(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    body: Option<Json<StatusBody>>,
+) -> Result<Response, ApiError> {
+    let Some(Json(body)) = body else {
+        return Ok((StatusCode::BAD_REQUEST, "invalid status body").into_response());
+    };
+    match state.store.set_status(id, body.status).await {
+        Ok(issue) => {
+            // Best-effort broadcast: a missing receiver only means no client
+            // is subscribed, which is harmless — they'll catch up via the
+            // next Snapshot. We deliberately don't fail the request on a
+            // dead channel.
+            let _ = state.fanout.send(errex_proto::ServerMessage::IssueUpdated {
+                issue: issue.clone(),
+            });
+            Ok(Json(issue).into_response())
+        }
+        Err(DaemonError::NotFound(_)) => {
+            Ok((StatusCode::NOT_FOUND, "issue not found").into_response())
+        }
+        Err(other) => Err(other.into()),
+    }
+}
+
+/// Latest event payload for an issue, returned as the verbatim Event JSON.
+/// Used by the SPA to populate StackTrace / Breadcrumbs / Tags. Returns 404
+/// when the issue exists but has no events yet (possible only during the
+/// brief window after upsert before insert_event lands).
+async fn latest_event(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Response, ApiError> {
+    match state.store.latest_event(id).await? {
+        Some(stored) => Ok(Json(stored).into_response()),
+        None => Ok((StatusCode::NOT_FOUND, "no event for issue").into_response()),
+    }
+}
+
+// ----- admin endpoints -----
+
+/// JSON shape returned to the SPA's project-settings UI. Adds `dsn`
+/// (server-computed from `public_url`) on top of the persisted Project.
+#[derive(serde::Serialize)]
+struct AdminProjectView {
+    name: String,
+    token: String,
+    webhook_url: Option<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+    dsn: String,
+    /// Most recent webhook delivery health. `None` until the webhook task
+    /// fires for the first time. See `record_webhook_attempt` for the 0
+    /// sentinel meaning.
+    last_webhook_status: Option<i16>,
+    last_webhook_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+fn dsn_for(public_url: &str, project: &str, token: &str) -> String {
+    format!(
+        "{}/api/{}/envelope/?sentry_key={}",
+        public_url.trim_end_matches('/'),
+        project,
+        token,
+    )
+}
+
+impl AdminProjectView {
+    fn from(p: crate::store::Project, public_url: &str) -> Self {
+        let dsn = dsn_for(public_url, &p.name, &p.token);
+        AdminProjectView {
+            name: p.name,
+            token: p.token,
+            webhook_url: p.webhook_url,
+            created_at: p.created_at,
+            last_used_at: p.last_used_at,
+            dsn,
+            last_webhook_status: p.last_webhook_status,
+            last_webhook_at: p.last_webhook_at,
+        }
+    }
+}
+
+/// Bridges `/api/admin/*` handlers to the cookie-session model. Earlier
+/// versions accepted a shared `Authorization: Bearer ERREXD_ADMIN_TOKEN`;
+/// after the multi-user migration that token is consumed by the setup
+/// wizard once and then forever ignored. Admin endpoints now require:
+///
+///   1. A valid `errex_session` cookie (issued by `/api/auth/login`).
+///   2. The session's user has the `admin` role.
+///
+/// The clippy `result_large_err` lint fires because `Response` is ~128 B;
+/// boxing would obscure the simple flow.
+#[allow(clippy::result_large_err)]
+async fn check_admin(state: &AppState, headers: &axum::http::HeaderMap) -> Result<(), Response> {
+    crate::auth::require_admin(state, headers).await.map(|_| ())
+}
+
+async fn admin_list_projects(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    let list = state.store.list_admin_projects().await?;
+    let view: Vec<AdminProjectView> = list
+        .into_iter()
+        .map(|p| AdminProjectView::from(p, &state.public_url))
+        .collect();
+    Ok(Json(view).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateProjectBody {
+    name: String,
+}
+
+async fn admin_create_project(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: Option<Json<CreateProjectBody>>,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    let Some(Json(body)) = body else {
+        return Ok((StatusCode::BAD_REQUEST, "missing body").into_response());
+    };
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Ok((StatusCode::BAD_REQUEST, "name must not be empty").into_response());
+    }
+    match state.store.create_project(name).await {
+        Ok(p) => {
+            let view = AdminProjectView::from(p, &state.public_url);
+            Ok((StatusCode::CREATED, Json(view)).into_response())
+        }
+        Err(DaemonError::Sqlx(sqlx::Error::Database(db_err))) if db_err.is_unique_violation() => {
+            Ok((StatusCode::CONFLICT, "project name already exists").into_response())
+        }
+        Err(other) => Err(other.into()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookBody {
+    /// Null clears the webhook; a string sets it.
+    url: Option<String>,
+}
+
+async fn admin_set_webhook(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    headers: axum::http::HeaderMap,
+    body: Option<Json<WebhookBody>>,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    let Some(Json(body)) = body else {
+        return Ok((StatusCode::BAD_REQUEST, "missing body").into_response());
+    };
+    match state
+        .store
+        .set_project_webhook(&name, body.url.as_deref())
+        .await
+    {
+        Ok(()) => {
+            let p = state
+                .store
+                .project_by_name(&name)
+                .await?
+                .expect("just-updated project must exist");
+            Ok(Json(AdminProjectView::from(p, &state.public_url)).into_response())
+        }
+        Err(DaemonError::NotFound(_)) => {
+            Ok((StatusCode::NOT_FOUND, "project not found").into_response())
+        }
+        Err(other) => Err(other.into()),
+    }
+}
+
+async fn admin_rotate_token(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    match state.store.rotate_token(&name).await {
+        Ok(p) => Ok(Json(AdminProjectView::from(p, &state.public_url)).into_response()),
+        Err(DaemonError::NotFound(_)) => {
+            Ok((StatusCode::NOT_FOUND, "project not found").into_response())
+        }
+        Err(other) => Err(other.into()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RenameBody {
+    name: String,
+}
+
+async fn admin_rename_project(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    headers: axum::http::HeaderMap,
+    body: Option<Json<RenameBody>>,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    let Some(Json(body)) = body else {
+        return Ok((StatusCode::BAD_REQUEST, "missing body").into_response());
+    };
+    let new_name = body.name.trim();
+    if new_name.is_empty() {
+        return Ok((StatusCode::BAD_REQUEST, "name must not be empty").into_response());
+    }
+    match state.store.rename_project(&name, new_name).await {
+        Ok(p) => Ok(Json(AdminProjectView::from(p, &state.public_url)).into_response()),
+        Err(DaemonError::NotFound(_)) => {
+            Ok((StatusCode::NOT_FOUND, "project not found").into_response())
+        }
+        Err(DaemonError::Sqlx(sqlx::Error::Database(db_err))) if db_err.is_unique_violation() => {
+            Ok((StatusCode::CONFLICT, "project name already exists").into_response())
+        }
+        Err(other) => Err(other.into()),
+    }
+}
+
+async fn admin_delete_project(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    match state.store.delete_project(&name).await {
+        Ok(summary) => Ok(Json(summary).into_response()),
+        Err(DaemonError::NotFound(_)) => {
+            Ok((StatusCode::NOT_FOUND, "project not found").into_response())
+        }
+        Err(other) => Err(other.into()),
+    }
+}
+
+async fn admin_destroy_preview(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    match state.store.delete_preview(&name).await {
+        Ok(summary) => Ok(Json(summary).into_response()),
+        Err(DaemonError::NotFound(_)) => {
+            Ok((StatusCode::NOT_FOUND, "project not found").into_response())
+        }
+        Err(other) => Err(other.into()),
+    }
+}
+
+async fn admin_project_activity(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    // Verify the project exists so unknown names get 404 instead of "all
+    // zeros, looks legit." The activity query itself returns zeros for any
+    // string and won't tell the operator their typo.
+    if state.store.project_by_name(&name).await?.is_none() {
+        return Ok((StatusCode::NOT_FOUND, "project not found").into_response());
+    }
+    let stats = state
+        .store
+        .activity_stats(&name, chrono::Utc::now())
+        .await?;
+    Ok(Json(stats).into_response())
+}
+
+// ----- admin: users -----
+
+async fn admin_list_users(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    let users = state.store.list_users().await?;
+    Ok(Json(users).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateUserBody {
+    username: String,
+    password: String,
+    role: crate::store::Role,
+}
+
+async fn admin_create_user(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: Option<Json<CreateUserBody>>,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    let Some(Json(body)) = body else {
+        return Ok((StatusCode::BAD_REQUEST, "missing body").into_response());
+    };
+    let username = body.username.trim();
+    if username.is_empty() || username.len() > 64 {
+        return Ok((StatusCode::BAD_REQUEST, "username 1..=64 chars").into_response());
+    }
+    if let Err(why) = crate::crypto::validate_password_strength(&body.password) {
+        return Ok((StatusCode::BAD_REQUEST, why).into_response());
+    }
+    let hash = crate::crypto::hash_password(&body.password)?;
+    match state.store.create_user(username, &hash, body.role).await {
+        Ok(u) => Ok((StatusCode::CREATED, Json(u)).into_response()),
+        Err(DaemonError::Sqlx(sqlx::Error::Database(db_err))) if db_err.is_unique_violation() => {
+            Ok((StatusCode::CONFLICT, "username already exists").into_response())
+        }
+        Err(other) => Err(other.into()),
+    }
+}
+
+async fn admin_get_user(
+    State(state): State<Arc<AppState>>,
+    Path(u): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    match state.store.get_user(&u).await? {
+        Some(user) => Ok(Json(user).into_response()),
+        None => Ok((StatusCode::NOT_FOUND, "user not found").into_response()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PatchUserBody {
+    /// New password. Validated for strength when present. None = no change.
+    password: Option<String>,
+    role: Option<crate::store::Role>,
+    /// `true` deactivates (revoking sessions), `false` reactivates.
+    deactivated: Option<bool>,
+}
+
+async fn admin_patch_user(
+    State(state): State<Arc<AppState>>,
+    Path(u): Path<String>,
+    headers: axum::http::HeaderMap,
+    body: Option<Json<PatchUserBody>>,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    let Some(Json(body)) = body else {
+        return Ok((StatusCode::BAD_REQUEST, "missing body").into_response());
+    };
+    if state.store.get_user(&u).await?.is_none() {
+        return Ok((StatusCode::NOT_FOUND, "user not found").into_response());
+    }
+
+    // Validate the proposed change BEFORE applying anything: if any field
+    // is rejected we want a clean 4xx, not a half-applied PATCH.
+    if let Some(p) = &body.password {
+        if let Err(why) = crate::crypto::validate_password_strength(p) {
+            return Ok((StatusCode::BAD_REQUEST, why).into_response());
+        }
+    }
+
+    // Last-active-admin guard. A demote, deactivate, or delete that would
+    // leave zero active admins is refused — otherwise an errant click can
+    // permanently lock everyone out of the daemon.
+    let current = state
+        .store
+        .get_user(&u)
+        .await?
+        .expect("existence checked above");
+    let demoting = body
+        .role
+        .map(|r| r != crate::store::Role::Admin && current.role == crate::store::Role::Admin)
+        .unwrap_or(false);
+    let deactivating = body.deactivated.unwrap_or(false)
+        && current.role == crate::store::Role::Admin
+        && current.deactivated_at.is_none();
+    if (demoting || deactivating) && state.store.count_active_admins().await? <= 1 {
+        return Ok((
+            StatusCode::CONFLICT,
+            "cannot demote or deactivate the last active admin",
+        )
+            .into_response());
+    }
+
+    if let Some(p) = &body.password {
+        let hash = crate::crypto::hash_password(p)?;
+        state.store.set_user_password(&u, &hash).await?;
+    }
+    if let Some(role) = body.role {
+        state.store.set_user_role(&u, role).await?;
+    }
+    if let Some(deact) = body.deactivated {
+        state.store.set_user_deactivated(&u, deact).await?;
+    }
+
+    let updated = state
+        .store
+        .get_user(&u)
+        .await?
+        .expect("existence checked above");
+    Ok(Json(updated).into_response())
+}
+
+async fn admin_delete_user(
+    State(state): State<Arc<AppState>>,
+    Path(u): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    let target = match state.store.get_user(&u).await? {
+        Some(t) => t,
+        None => return Ok((StatusCode::NOT_FOUND, "user not found").into_response()),
+    };
+    if target.role == crate::store::Role::Admin
+        && target.deactivated_at.is_none()
+        && state.store.count_active_admins().await? <= 1
+    {
+        return Ok((StatusCode::CONFLICT, "cannot delete the last active admin").into_response());
+    }
+    state.store.delete_user(&u).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+async fn admin_list_user_sessions(
+    State(state): State<Arc<AppState>>,
+    Path(u): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    if state.store.get_user(&u).await?.is_none() {
+        return Ok((StatusCode::NOT_FOUND, "user not found").into_response());
+    }
+    let sessions = state.store.list_user_sessions(&u).await?;
+    Ok(Json(sessions).into_response())
+}
+
+async fn admin_revoke_user_sessions(
+    State(state): State<Arc<AppState>>,
+    Path(u): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    if state.store.get_user(&u).await?.is_none() {
+        return Ok((StatusCode::NOT_FOUND, "user not found").into_response());
+    }
+    let revoked = state.store.revoke_user_sessions(&u).await?;
+    Ok(Json(serde_json::json!({"sessions_revoked": revoked})).into_response())
+}
+
+/// Surface store errors as a 500 with a tracing breadcrumb. We deliberately
+/// don't leak the underlying message to the client.
+pub(crate) struct ApiError(DaemonError);
+
+impl From<DaemonError> for ApiError {
+    fn from(e: DaemonError) -> Self {
+        Self(e)
+    }
+}
+
+// Allow `password_hash::Error` (argon2 init / verify) to bubble through
+// `?` in auth handlers without wrapping it manually.
+impl From<password_hash::Error> for ApiError {
+    fn from(e: password_hash::Error) -> Self {
+        Self(DaemonError::Crypto(format!("crypto: {e}")))
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> axum::response::Response {
+        tracing::error!(err = %self.0, "api error");
+        (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
+    }
+}
+
+/// Pull the SDK ingest token out of either the `X-Sentry-Auth` header
+/// (Sentry SDK convention: `Sentry sentry_key=..., sentry_version=...`)
+/// or a `?sentry_key=` query param (also Sentry-supported).
+fn extract_sentry_key(req_headers: &axum::http::HeaderMap, query: &str) -> Option<String> {
+    if let Some(auth) = req_headers
+        .get("x-sentry-auth")
+        .and_then(|v| v.to_str().ok())
+    {
+        for part in auth.split(',') {
+            let part = part.trim();
+            // The leading `Sentry ` realm is optional; many SDKs prefix it.
+            for kv in part.split_whitespace() {
+                if let Some(rest) = kv.strip_prefix("sentry_key=") {
+                    return Some(rest.trim_matches('"').to_string());
+                }
+            }
+        }
+    }
+    for pair in query.split('&') {
+        if let Some(rest) = pair.strip_prefix("sentry_key=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+async fn ingest_envelope(
+    State(state): State<Arc<AppState>>,
+    Path(project): Path<String>,
+    headers: axum::http::HeaderMap,
+    uri: axum::http::Uri,
+    body: Bytes,
+) -> impl IntoResponse {
+    if state.require_auth {
+        let key = extract_sentry_key(&headers, uri.query().unwrap_or(""));
+        let Some(key) = key else {
+            return (StatusCode::UNAUTHORIZED, "missing sentry_key").into_response();
+        };
+        match state.store.project_by_token(&key).await {
+            Ok(Some(p)) if p.name == project => {
+                state.store.touch_project_used(&p.name).await;
+            }
+            Ok(_) => {
+                return (StatusCode::UNAUTHORIZED, "invalid sentry_key for project")
+                    .into_response();
+            }
+            Err(err) => {
+                tracing::error!(%err, "ingest auth lookup failed");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
+            }
+        }
+    }
+
+    // Rate limit AFTER auth so unauthenticated traffic doesn't fill the
+    // limiter map and DoS legitimate projects.
+    if !state
+        .rate_limiter
+        .check(&project, std::time::Instant::now())
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
+    }
+    let raw = match maybe_gunzip(&body) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::warn!(%err, "ingest: failed to gunzip envelope");
+            return (StatusCode::BAD_REQUEST, "invalid gzip").into_response();
+        }
+    };
+
+    let events = match parse_envelope(&raw) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::warn!(%err, "ingest: failed to parse envelope");
+            return (StatusCode::BAD_REQUEST, "invalid envelope").into_response();
+        }
+    };
+
+    if events.is_empty() {
+        // Sentry SDKs send envelopes that contain only sessions or
+        // transactions; that's not an error, just nothing for us yet.
+        return StatusCode::OK.into_response();
+    }
+
+    for event in events {
+        if state
+            .events
+            .send(IngestEvent {
+                project: project.clone(),
+                event,
+            })
+            .await
+            .is_err()
+        {
+            return (StatusCode::SERVICE_UNAVAILABLE, "shutting down").into_response();
+        }
+    }
+
+    StatusCode::OK.into_response()
+}
+
+/// Detect gzip via magic bytes rather than trusting `Content-Encoding`. Sentry
+/// SDKs are inconsistent about setting the header, and the cost of sniffing
+/// two bytes is negligible.
+fn maybe_gunzip(body: &[u8]) -> std::io::Result<Vec<u8>> {
+    if body.len() >= 2 && body[0] == 0x1f && body[1] == 0x8b {
+        let mut out = Vec::with_capacity(body.len() * 3);
+        GzDecoder::new(body).read_to_end(&mut out)?;
+        Ok(out)
+    } else {
+        Ok(body.to_vec())
+    }
+}
+
+/// Parse a Sentry envelope and return the event payloads it contains.
+///
+/// The envelope format:
+/// - line 1: envelope header (JSON object)
+/// - then pairs of `{item_header}\n{item_payload}\n`
+///
+/// Item headers may include a `length` field; if so, the payload is exactly
+/// that many bytes. If absent, the payload runs until the next newline.
+/// We only surface items of `type == "event"` — everything else (sessions,
+/// transactions, attachments) is skipped silently.
+fn parse_envelope(raw: &[u8]) -> Result<Vec<Event>, ProtoError> {
+    let mut events = Vec::new();
+    let mut cursor = 0usize;
+
+    // Envelope header.
+    let (_header, after_header) = read_line(raw, cursor)
+        .ok_or_else(|| ProtoError::InvalidEnvelope("missing envelope header".into()))?;
+    let _: Value = serde_json::from_slice(&raw[cursor..after_header.saturating_sub(1)])?;
+    cursor = after_header;
+
+    while cursor < raw.len() {
+        let (item_header_end, next_cursor) = match read_line(raw, cursor) {
+            Some(r) => r,
+            None => break,
+        };
+        let header_bytes = &raw[cursor..item_header_end.saturating_sub(1)];
+        if header_bytes.is_empty() {
+            cursor = next_cursor;
+            continue;
+        }
+        let header: Value = serde_json::from_slice(header_bytes)?;
+        cursor = next_cursor;
+
+        let item_type = header.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        let payload_end = if let Some(len) = header.get("length").and_then(|v| v.as_u64()) {
+            let end = cursor + len as usize;
+            if end > raw.len() {
+                return Err(ProtoError::InvalidEnvelope(
+                    "item length exceeds envelope size".into(),
+                ));
+            }
+            end
+        } else {
+            // No length: payload runs to the next newline (or to EOF).
+            raw[cursor..]
+                .iter()
+                .position(|&b| b == b'\n')
+                .map(|p| cursor + p)
+                .unwrap_or(raw.len())
+        };
+
+        let payload = &raw[cursor..payload_end];
+        if item_type == "event" {
+            let event: Event = serde_json::from_slice(payload)?;
+            events.push(event);
+        }
+
+        // Advance past payload and its trailing newline (if any).
+        cursor = payload_end;
+        if cursor < raw.len() && raw[cursor] == b'\n' {
+            cursor += 1;
+        }
+    }
+
+    Ok(events)
+}
+
+/// Returns `(line_end_exclusive_of_newline_position, next_cursor)`. Both are
+/// byte offsets into `buf`. None when no newline is found and `start` is at EOF.
+fn read_line(buf: &[u8], start: usize) -> Option<(usize, usize)> {
+    if start >= buf.len() {
+        return None;
+    }
+    match buf[start..].iter().position(|&b| b == b'\n') {
+        Some(rel) => Some((start + rel + 1, start + rel + 1)),
+        None => Some((buf.len(), buf.len())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the Sentry envelope parser. These pin the parts of the
+    //! format the daemon relies on: header line, length-prefixed items,
+    //! length-less items terminated by newline or EOF, gzip detection, and
+    //! the "ignore non-event items" contract.
+
+    use super::*;
+    use std::io::Write;
+
+    fn header() -> &'static str {
+        r#"{"event_id":"abc","sent_at":"2026-01-01T00:00:00Z"}"#
+    }
+
+    fn event_body(ty: &str) -> String {
+        format!(
+            r#"{{"timestamp":"2026-01-01T00:00:00Z","exception":{{"values":[{{"type":"{}","value":"v"}}]}}}}"#,
+            ty
+        )
+    }
+
+    #[test]
+    fn parses_single_event_with_length_prefix() {
+        let body = event_body("Boom");
+        let item_header = format!(r#"{{"type":"event","length":{}}}"#, body.len());
+        let envelope = format!("{}\n{}\n{}\n", header(), item_header, body);
+        let events = parse_envelope(envelope.as_bytes()).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].primary_exception().and_then(|e| e.ty.as_deref()),
+            Some("Boom")
+        );
+    }
+
+    #[test]
+    fn parses_event_without_length_field() {
+        // Length-less items terminate at the next newline. Sentry SDKs in
+        // older versions sent these.
+        let body = event_body("NoLen");
+        let envelope = format!("{}\n{}\n{}\n", header(), r#"{"type":"event"}"#, body);
+        let events = parse_envelope(envelope.as_bytes()).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].primary_exception().and_then(|e| e.ty.as_deref()),
+            Some("NoLen")
+        );
+    }
+
+    #[test]
+    fn parses_event_without_trailing_newline() {
+        // Some clients omit the final newline. Last item must run to EOF.
+        let body = event_body("Trail");
+        let envelope = format!("{}\n{}\n{}", header(), r#"{"type":"event"}"#, body);
+        let events = parse_envelope(envelope.as_bytes()).unwrap();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn skips_non_event_items() {
+        // sessions, transactions, attachments — all silently ignored.
+        let session = r#"{"sid":"s1","status":"ok"}"#;
+        let event_b = event_body("KeepMe");
+        let session_header = format!(r#"{{"type":"session","length":{}}}"#, session.len());
+        let envelope = format!(
+            "{}\n{}\n{}\n{}\n{}\n",
+            header(),
+            session_header,
+            session,
+            r#"{"type":"event"}"#,
+            event_b,
+        );
+        let events = parse_envelope(envelope.as_bytes()).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].primary_exception().and_then(|e| e.ty.as_deref()),
+            Some("KeepMe")
+        );
+    }
+
+    #[test]
+    fn parses_two_events_in_one_envelope() {
+        let b1 = event_body("First");
+        let b2 = event_body("Second");
+        let envelope = format!(
+            "{}\n{}\n{}\n{}\n{}\n",
+            header(),
+            r#"{"type":"event"}"#,
+            b1,
+            r#"{"type":"event"}"#,
+            b2,
+        );
+        let events = parse_envelope(envelope.as_bytes()).unwrap();
+        assert_eq!(events.len(), 2);
+        let types: Vec<_> = events
+            .iter()
+            .map(|e| e.primary_exception().and_then(|x| x.ty.clone()))
+            .collect();
+        assert_eq!(
+            types,
+            vec![Some("First".to_string()), Some("Second".to_string())]
+        );
+    }
+
+    #[test]
+    fn empty_envelope_with_only_header_yields_no_events() {
+        let envelope = format!("{}\n", header());
+        let events = parse_envelope(envelope.as_bytes()).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn rejects_envelope_with_no_header() {
+        let err = parse_envelope(b"").unwrap_err();
+        assert!(matches!(err, ProtoError::InvalidEnvelope(_)));
+    }
+
+    #[test]
+    fn rejects_invalid_json_header() {
+        let err = parse_envelope(b"not-json\n").unwrap_err();
+        // Either Json error or InvalidEnvelope — both are valid 400s.
+        assert!(matches!(
+            err,
+            ProtoError::Json(_) | ProtoError::InvalidEnvelope(_)
+        ));
+    }
+
+    #[test]
+    fn rejects_length_overflowing_envelope() {
+        let envelope = format!(
+            "{}\n{}\nshort",
+            header(),
+            r#"{"type":"event","length":9999}"#
+        );
+        let err = parse_envelope(envelope.as_bytes()).unwrap_err();
+        assert!(matches!(err, ProtoError::InvalidEnvelope(_)));
+    }
+
+    // ----- gzip detection -----
+
+    #[test]
+    fn maybe_gunzip_passes_through_plain_bytes() {
+        let plain = b"hello world";
+        let out = maybe_gunzip(plain).unwrap();
+        assert_eq!(out, plain);
+    }
+
+    #[test]
+    fn maybe_gunzip_decompresses_gzip_magic() {
+        let plain = b"the quick brown fox jumps over the lazy dog";
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(plain).unwrap();
+        let gz = enc.finish().unwrap();
+        assert_eq!(gz[0..2], [0x1f, 0x8b], "encoder must emit gzip magic");
+        let out = maybe_gunzip(&gz).unwrap();
+        assert_eq!(out, plain);
+    }
+
+    #[test]
+    fn maybe_gunzip_handles_empty_input() {
+        let out = maybe_gunzip(&[]).unwrap();
+        assert!(out.is_empty());
+    }
+
+    // ----- read_line edge cases -----
+
+    #[test]
+    fn read_line_returns_position_after_newline() {
+        let buf = b"first\nsecond";
+        let (end, next) = read_line(buf, 0).unwrap();
+        assert_eq!(end, 6, "end is one past the newline");
+        assert_eq!(next, 6);
+    }
+
+    #[test]
+    fn read_line_handles_no_trailing_newline() {
+        let buf = b"only-line";
+        let (end, next) = read_line(buf, 0).unwrap();
+        assert_eq!(end, buf.len());
+        assert_eq!(next, buf.len());
+    }
+
+    #[test]
+    fn read_line_returns_none_at_eof() {
+        let buf = b"abc";
+        assert!(read_line(buf, 3).is_none());
+    }
+}

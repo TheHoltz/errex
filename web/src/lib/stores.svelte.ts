@@ -1,0 +1,108 @@
+import type {
+  ConnectionStatus,
+  Issue,
+  IssueStatus,
+  NormalizedEvent,
+  ProjectSummary
+} from './types';
+
+// Reactive global state via Svelte 5 runes. Modules are evaluated once, so the
+// rune values live for the lifetime of the app — components import the proxy
+// objects below and read fields directly to subscribe.
+
+class IssuesStore {
+  byId = $state<Map<number, Issue>>(new Map());
+
+  list = $derived.by(() => {
+    const arr = Array.from(this.byId.values());
+    arr.sort((a, b) => +new Date(b.last_seen) - +new Date(a.last_seen));
+    return arr;
+  });
+
+  reset(issues: Issue[]) {
+    const m = new Map<number, Issue>();
+    for (const i of issues) m.set(i.id, i);
+    this.byId = m;
+  }
+
+  upsert(issue: Issue) {
+    const m = new Map(this.byId);
+    m.set(issue.id, issue);
+    this.byId = m;
+  }
+
+  get(id: number): Issue | undefined {
+    return this.byId.get(id);
+  }
+}
+
+class FilterStore {
+  query = $state('');
+  // Default view shows what's actionable; resolved/muted/ignored are hidden
+  // until the user opts in. Power users can toggle via the list header.
+  statuses = $state<Set<IssueStatus>>(new Set(['unresolved']));
+
+  toggleStatus(s: IssueStatus) {
+    const next = new Set(this.statuses);
+    if (next.has(s)) next.delete(s);
+    else next.add(s);
+    this.statuses = next;
+  }
+}
+
+class ConnectionStore {
+  status = $state<ConnectionStatus>('connecting');
+  serverVersion = $state<string | null>(null);
+}
+
+class ProjectsStore {
+  available = $state<ProjectSummary[]>([]);
+  current = $state<string>('default');
+}
+
+class SelectionStore {
+  issueId = $state<number | null>(null);
+  // Hydrated from `/api/issues/:id/event` whenever issueId changes; null
+  // while in flight or when the issue has no events stored yet.
+  event = $state<NormalizedEvent | null>(null);
+  eventLoading = $state(false);
+}
+
+class LoadStore {
+  // True until the first WS Snapshot arrives (or the initial REST fallback
+  // resolves). Used to render skeletons rather than "empty" states on boot.
+  initialLoad = $state(true);
+}
+
+export const issues = new IssuesStore();
+export const filter = new FilterStore();
+export const connection = new ConnectionStore();
+export const projects = new ProjectsStore();
+export const selection = new SelectionStore();
+export const load = new LoadStore();
+
+// Computed for the issue list pane. Svelte 5 disallows exporting `$derived`
+// values directly from a module, so we expose a getter; consumers read it
+// from inside a component, where Svelte still tracks the dependencies.
+//
+// Status comes from the server-side `Issue.status` field (broadcast via
+// IssueUpdated WS messages and persisted in SQLite). Earlier iterations
+// kept this in localStorage; that gave each browser its own truth and was
+// wrong for any team larger than one.
+export function visibleIssues(): Issue[] {
+  const q = filter.query.trim().toLowerCase();
+  return issues.list.filter((i) => {
+    if (i.project !== projects.current) return false;
+    if (!filter.statuses.has(i.status)) return false;
+    if (q && !matches(i, q)) return false;
+    return true;
+  });
+}
+
+function matches(i: Issue, q: string): boolean {
+  return (
+    i.title.toLowerCase().includes(q) ||
+    (i.culprit?.toLowerCase().includes(q) ?? false) ||
+    i.fingerprint.toLowerCase().includes(q)
+  );
+}
