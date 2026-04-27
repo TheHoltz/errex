@@ -22,6 +22,7 @@ web/build
 
 # Local Claude Code / harness state — not for the public repo
 .claude/scheduled_tasks.lock
+.claude/*.local.*
 .superpowers
 .worktrees
 

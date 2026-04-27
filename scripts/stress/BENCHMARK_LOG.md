@@ -90,6 +90,27 @@ explicitly in the log entry before implementing.
   not a WAL checkpoint stall. Tail-latency optimization (hypothesis 3
   in the bank) is now low priority unless it resurfaces.
 
+### Iteration 3 — `synchronous = OFF`
+
+- **hypothesis (bank #7):** SQLite's COMMIT fsync is the dominant
+  per-batch cost on real disks (ext4 here). `synchronous=OFF` skips
+  the fsync; trade-off is up to one txn lost on host power loss
+  (NOT on daemon crash — WAL still recovers).
+- **changed:** `crates/errexd/src/store.rs` (`SqliteSynchronous::Normal`
+  → `Off`, comment block expanded with the trade-off rationale).
+- **bench:** `{"achieved_rps":3748.6,"p99_ms":5.33,"max_ms":54.56,"rss_max_mb":20.75,"errors":0,"efficiency_eps_per_mb":180.66}`
+- **delta vs running best (iter-1, 164.23):** efficiency +10.0%
+  (164.23 → 180.66). RSS -9% (22.83 → 20.75 MB). Throughput flat.
+  max regressed (11.36 → 54.56 ms) but still well under the 500 ms
+  gate.
+- **decision:** KEPT. Running best is now 180.66.
+- **notes:** Throughput unchanged — saturation is somewhere else
+  (HTTP parse / channel send / harness worker pacing at ~3750 RPS for
+  4000 target with 64 workers). RSS dropped because async fsync needs
+  less metadata buffering. Tail max grew because WAL checkpoint now
+  runs without fsync and lands at random — still small in absolute
+  terms. Trade-off for "ingest-on-cheap-host" is solidly worth it.
+
 ### Iteration 2 — multi-row event INSERT
 
 - **hypothesis (bank #2):** replace per-event `INSERT INTO events ...`
