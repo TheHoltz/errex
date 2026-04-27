@@ -11,8 +11,7 @@ self-host.
 | Variable | Default | What it does |
 |---|---|---|
 | `ERREXD_DATA_DIR` | `./data` | SQLite file location |
-| `ERREXD_HTTP_PORT` | `9090` | HTTP + SPA port |
-| `ERREXD_WS_PORT` | `9091` | WebSocket fan-out port |
+| `ERREXD_HTTP_PORT` | `9090` | HTTP + SPA + WebSocket fan-out (single axum listener) |
 | `ERREXD_MCP_PORT` | `9092` | MCP listener (stub) |
 | `ERREXD_LOG_LEVEL` | `info` | tracing filter |
 | `ERREXD_DEV_MODE` | `false` | Enable CORS for the Vite dev server |
@@ -25,16 +24,16 @@ self-host.
 
 ### Ports
 
-errex listens on three ports by default:
+errex listens on two ports by default:
 
-- `9090` — HTTP (Sentry ingest, REST API, embedded SPA)
-- `9091` — WebSocket fan-out (live updates for the dashboard)
+- `9090` — HTTP (Sentry ingest, REST API, embedded SPA, WebSocket upgrade)
 - `9092` — MCP listener (stub for AI agents)
 
-If you put errex behind a reverse proxy, route `/api`, `/ws`, and the SPA
-root to `9090`/`9091` accordingly. The SPA looks for the WebSocket at the
-same origin under `/ws`, so a typical nginx config proxies `/ws` to `9091`
-and everything else to `9090`.
+If you put errex behind a reverse proxy, forward everything to `9090` —
+the SPA, REST API, and WebSocket fan-out all share that listener. The SPA
+builds its WS URL from `location.host`, so anything that already proxies
+HTTP correctly will handle `/ws/<project>` upgrades without extra config
+(make sure the proxy passes through `Upgrade`/`Connection` headers).
 
 ## First-run setup
 

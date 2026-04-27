@@ -7,12 +7,20 @@ services:
     container_name: errexd
     restart: unless-stopped
     ports:
+      # 9090 = HTTP + WS (axum upgrade); 9092 = MCP stub.
       - "9090:9090"
-      - "9091:9091"
       - "9092:9092"
     volumes:
-      - ../data:/data
+      # Named volume so /data inherits the image's UID 1000 ownership.
+      # A host bind (e.g. ../data:/data) clobbers those perms with the host
+      # dir's owner, which makes SQLite fail to open the DB on any host
+      # whose UID isn't 1000. Power users who want a host-path bind should
+      # pre-create the dir with `chown 1000:1000` and swap this line.
+      - errex-data:/data
     environment:
       ERREXD_DATA_DIR: /data
       ERREXD_LOG_LEVEL: info
       ERREXD_ADMIN_TOKEN: ${ERREXD_ADMIN_TOKEN:-123}
+
+volumes:
+  errex-data:

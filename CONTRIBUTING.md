@@ -47,7 +47,7 @@ scripts/                   dev.sh, smoke.sh, seed.sh
 The fast path uses Docker for the daemon and `bun run dev` for the SPA:
 
 ```bash
-./errex.sh up -d                              # daemon on :9090/:9091/:9092
+./errex.sh up -d                              # daemon on :9090 (HTTP+WS) and :9092 (MCP)
 (cd web && bun install && bun run dev)        # SPA on :5173 with HMR
 open http://localhost:5173
 ```

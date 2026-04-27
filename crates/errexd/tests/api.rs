@@ -45,15 +45,25 @@ mod spa;
 mod store;
 #[path = "../src/webhook.rs"]
 mod webhook;
+#[path = "../src/ws.rs"]
+mod ws;
 
 use ingest::AppState;
 use store::Store;
 
 fn unique_tempdir() -> PathBuf {
+    // Atomic counter prevents same-nanosecond collisions across the ~140
+    // tests running in parallel in this binary. Two colliding paths would
+    // share a SQLite file and cause `UNIQUE constraint failed:
+    // _sqlx_migrations.version` on the second migrate.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let p = std::env::temp_dir().join(format!(
-        "errexd-api-{}-{}",
+        "errexd-api-{}-{}-{}",
         std::process::id(),
-        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        seq,
     ));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).expect("create tempdir");
@@ -288,6 +298,36 @@ async fn ingest_without_auth_required_accepts_anonymous_post() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn ingest_without_auth_bumps_project_last_used_at() {
+    // Telemetry: `last_used_at` powers the "no events yet" header in the SPA.
+    // It must update on every successful ingest, not just when auth is on.
+    let (router, store, _dir) = fixture_with_auth(false).await;
+    let p = store.create_project("p").await.unwrap();
+    assert!(
+        p.last_used_at.is_none(),
+        "fresh project starts with no last_used_at"
+    );
+
+    let res = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/p/envelope/")
+                .body(sample_envelope_body())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let after = store.project_by_name("p").await.unwrap().unwrap();
+    assert!(
+        after.last_used_at.is_some(),
+        "successful ingest must bump last_used_at even when require_auth is false",
+    );
 }
 
 #[tokio::test]
@@ -1513,6 +1553,104 @@ async fn admin_revoke_user_sessions_returns_count() {
     assert_eq!(res.status(), StatusCode::OK);
     let v = body_json(res).await;
     assert_eq!(v.get("sessions_revoked").and_then(|n| n.as_i64()), Some(3));
+}
+
+// ----- /ws/:project -----
+//
+// The fan-out WebSocket lives on the same listener as the HTTP API. These
+// tests bind a real ephemeral port (oneshot can't drive an upgrade) and
+// drive a tungstenite client against it. They pin the production-critical
+// invariant that brought us here: the daemon must answer the upgrade on
+// the HTTP port — the SPA builds its WS URL from `location.host`, so any
+// regression where /ws falls through to the SPA fallback (HTTP 200 +
+// index.html) breaks every browser instantly.
+
+use futures_util::{SinkExt, StreamExt};
+use std::net::SocketAddr;
+use tokio_tungstenite::tungstenite::Message;
+
+async fn spawn_server(router: axum::Router) -> SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let make = router.into_make_service_with_connect_info::<SocketAddr>();
+    tokio::spawn(async move {
+        axum::serve(listener, make).await.unwrap();
+    });
+    addr
+}
+
+async fn next_text(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) -> serde_json::Value {
+    let msg = ws.next().await.expect("stream ended").expect("ws error");
+    match msg {
+        Message::Text(t) => serde_json::from_str(&t).expect("valid json"),
+        other => panic!("expected text frame, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn ws_handshake_returns_hello_then_snapshot() {
+    let (router, store, _dir) = fixture().await;
+    store
+        .upsert_issue(
+            "alpha",
+            &Fingerprint::new("a"),
+            "Boom",
+            None,
+            None,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+    let addr = spawn_server(router).await;
+    let url = format!("ws://{}/ws/alpha", addr);
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(&url)
+        .await
+        .expect("upgrade");
+
+    let hello = next_text(&mut ws).await;
+    assert_eq!(hello.get("type").and_then(|s| s.as_str()), Some("hello"));
+    assert!(hello.get("server_version").is_some());
+
+    let snap = next_text(&mut ws).await;
+    assert_eq!(snap.get("type").and_then(|s| s.as_str()), Some("snapshot"));
+    let issues = snap
+        .get("issues")
+        .and_then(|i| i.as_array())
+        .expect("snapshot issues array");
+    assert_eq!(issues.len(), 1);
+    assert_eq!(
+        issues[0].get("project").and_then(|s| s.as_str()),
+        Some("alpha")
+    );
+}
+
+#[tokio::test]
+async fn ws_ping_keepalive_does_not_close() {
+    // Client-side Ping is documented as a no-op heartbeat. If the daemon
+    // ever started replying with Close on unknown messages, the keepalive
+    // would tear sockets down — pin it.
+    let (router, _store, _dir) = fixture().await;
+    let addr = spawn_server(router).await;
+    let url = format!("ws://{}/ws/alpha", addr);
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+
+    let _hello = next_text(&mut ws).await;
+    let _snap = next_text(&mut ws).await;
+
+    ws.send(Message::Text(r#"{"type":"ping"}"#.into()))
+        .await
+        .unwrap();
+
+    // Round-trip a ws-level ping/pong to prove the connection is still
+    // alive without racing on absence-of-message.
+    ws.send(Message::Ping(vec![])).await.unwrap();
+    let pong = ws.next().await.expect("pong").expect("ws ok");
+    assert!(matches!(pong, Message::Pong(_)), "got {:?}", pong);
 }
 
 // ----- /health -----

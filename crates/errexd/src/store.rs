@@ -461,9 +461,9 @@ impl Store {
 
     /// Bumps `last_used_at` for telemetry. Best-effort — a missing row or
     /// transient SQLite contention is logged and swallowed.
-    /// Used by ingest auth path; tests/store.rs doesn't exercise it
-    /// directly (covered via the api.rs auth tests instead).
-    #[allow(dead_code)]
+    /// Called on every successful envelope ingest; tests/store.rs doesn't
+    /// exercise it directly (covered via the api.rs ingest tests instead).
+    #[allow(dead_code)] // reason: tests/store.rs binary doesn't call this; api.rs binary does
     pub async fn touch_project_used(&self, name: &str) {
         if let Err(err) = sqlx::query("UPDATE projects SET last_used_at = ? WHERE name = ?")
             .bind(Utc::now().to_rfc3339())

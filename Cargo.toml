@@ -16,8 +16,11 @@ rust-version = "1.75"
 tokio = { version = "1.38", features = ["full"] }
 futures-util = "0.3"
 
-# HTTP / WebSocket
-axum = "0.7"
+# HTTP / WebSocket. axum's `ws` feature exposes WebSocketUpgrade so the
+# fan-out server shares the HTTP listener instead of opening a second port.
+# tokio-tungstenite stays in the dev-dep matrix for tests that drive the
+# server with a real client (and is still pulled in transitively).
+axum = { version = "0.7", features = ["ws"] }
 tokio-tungstenite = "0.21"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }

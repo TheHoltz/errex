@@ -23,13 +23,18 @@
   import { Separator } from '$lib/components/ui/separator';
   import * as Tooltip from '$lib/components/ui/tooltip';
   import {
+    buildTestEventCurl,
     formatWebhookHealth,
     projectActivityStatus,
     validateNewProjectName
   } from '$lib/projectsConsole';
+  import { sendTestEvent } from '$lib/testEvent';
   import { toast } from '$lib/toast.svelte';
   import { cn, relativeTime } from '$lib/utils';
   import type { ActivityStats, AdminProject } from '$lib/api';
+
+  // How long the "Sent" affordance lingers before reverting to "Send test event".
+  const SENT_REVERT_MS = 2000;
 
   type Props = { project: AdminProject };
   let { project }: Props = $props();
@@ -42,6 +47,8 @@
   let webhookDraft = $state('');
   let savingWebhook = $state(false);
   let testingWebhook = $state(false);
+  let testStatus = $state<'idle' | 'sending' | 'sent'>('idle');
+  let revertHandle = $state<ReturnType<typeof setTimeout> | null>(null);
 
   // Reset draft + reload activity whenever the active project changes.
   // Without this, switching from "alpha" to "beta" in the rail would keep
@@ -53,8 +60,24 @@
       webhookDraft = project.webhook_url ?? '';
       stats = null;
       statsError = null;
+      testStatus = 'idle';
+      if (revertHandle) {
+        clearTimeout(revertHandle);
+        revertHandle = null;
+      }
       void refreshActivity();
     }
+  });
+
+  // Mirror the `pendingRefetch` cleanup pattern below: a dedicated $effect
+  // tracks revertHandle so the timer is killed on component unmount —
+  // otherwise navigating away mid-flight leaks a phantom 2s timer that
+  // holds a closure reference to the destroyed reactive scope.
+  $effect(() => {
+    const h = revertHandle;
+    return () => {
+      if (h) clearTimeout(h);
+    };
   });
 
   async function refreshActivity() {
@@ -185,6 +208,42 @@
     }
   }
 
+  async function sendTest() {
+    // Capture the project name at click time. If the user switches projects
+    // while the fetch is in flight, the in-flight result must NOT mutate
+    // testStatus on the now-active project — that would flash "Sent" on
+    // the wrong project's button.
+    const expectedProject = project.name;
+    testStatus = 'sending';
+    if (revertHandle) {
+      clearTimeout(revertHandle);
+      revertHandle = null;
+    }
+    const result = await sendTestEvent(project.dsn);
+    if (project.name !== expectedProject) return;
+    if (result.kind === 'ok') {
+      testStatus = 'sent';
+      revertHandle = setTimeout(() => {
+        testStatus = 'idle';
+        revertHandle = null;
+      }, SENT_REVERT_MS);
+      return;
+    }
+    testStatus = 'idle';
+    if (result.kind === 'http') {
+      toast.error(`Ingest returned ${result.status}`, {
+        description: result.body || `HTTP ${result.status}`,
+      });
+    } else if (result.kind === 'blocked') {
+      toast.error('Request blocked by browser', {
+        description:
+          'An ad blocker (uBlock Origin, etc.) blocked the test event. Disable it for this site, or use “or copy as curl” instead.',
+      });
+    } else {
+      toast.error('Network error', { description: String(result.error) });
+    }
+  }
+
   // ----- rotate ----------------------------------------------------------
   let rotateOpen = $state(false);
   let rotatedDsn = $state<string | null>(null);
@@ -228,11 +287,7 @@
   let deleteOpen = $state(false);
 
   async function copyCurl() {
-    const cmd = [
-      `curl -X POST '${project.dsn}' \\`,
-      `  -H 'content-type: application/json' \\`,
-      `  -d '{"event_id":"test","level":"error","message":"errex test event"}'`
-    ].join('\n');
+    const cmd = buildTestEventCurl(project.dsn);
     try {
       await navigator.clipboard.writeText(cmd);
       toast.success('Test command copied');
@@ -354,15 +409,36 @@
         Connection · DSN
       </Label>
       <DsnSnippet dsn={project.dsn} label={`DSN for ${project.name}`} />
-      <Button
-        variant="ghost"
-        size="sm"
-        onclick={copyCurl}
-        class="text-muted-foreground hover:text-foreground hover:bg-transparent h-auto self-start p-0 text-[11px] font-normal"
-      >
-        <ClipboardCopy class="h-3 w-3" />
-        Copy a curl that sends a test event
-      </Button>
+      <div class="flex flex-row items-center gap-3">
+        <Button
+          variant="outline"
+          size="sm"
+          onclick={sendTest}
+          disabled={testStatus !== 'idle'}
+          aria-label="Send a test event to this project's ingest endpoint"
+          class={cn(testStatus === 'sent' && 'text-emerald-500 hover:text-emerald-500')}
+        >
+          {#if testStatus === 'sending'}
+            <Loader2 class="h-3.5 w-3.5 animate-spin" />
+            Sending…
+          {:else if testStatus === 'sent'}
+            <Check class="h-3.5 w-3.5" />
+            Sent
+          {:else}
+            <Send class="h-3.5 w-3.5" />
+            Send test event
+          {/if}
+        </Button>
+        <Button
+          variant="link"
+          size="sm"
+          onclick={copyCurl}
+          class="text-muted-foreground hover:text-foreground h-auto gap-1.5 px-0 text-[11px] hover:no-underline"
+        >
+          <ClipboardCopy class="h-3 w-3" />
+          or copy as curl
+        </Button>
+      </div>
     </section>
 
     <Separator />

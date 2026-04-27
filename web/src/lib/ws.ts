@@ -16,9 +16,10 @@ let pendingProject: string | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 function url(project: string): string {
-  // In production the SPA is same-origin with the daemon; the WS server lives
-  // on a different port. Vite's proxy rewrites /ws/<project> → ws://host:9091
-  // in dev, so the path is identical in both environments.
+  // Same origin as the SPA in both prod and dev. In prod the daemon's axum
+  // listener handles the upgrade on the HTTP port; in dev Vite proxies
+  // /ws/* to that same listener. Building from `location.host` keeps the
+  // SPA portable across deployments without env-time configuration.
   if (!browser) return '';
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws/${encodeURIComponent(project)}`;
@@ -26,6 +27,21 @@ function url(project: string): string {
 
 export function connect(project: string) {
   if (!browser) return;
+  // Idempotent for same-project re-calls: if we're already connecting or
+  // connected to this project, leave the socket alone. Without this guard,
+  // two callers in the same tick (bootstrap + page-effect on a project
+  // route, an HMR re-fire, etc.) would close an in-flight socket and trip
+  // the browser's "WebSocket is closed before the connection is
+  // established" warning.
+  if (
+    socket &&
+    pendingProject === project &&
+    (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)
+  ) {
+    projects.current = project;
+    return;
+  }
+
   // Project switch invalidates the in-memory view; the new project will
   // arrive via Snapshot in a moment.
   if (project !== projects.current) eventStream.clear();

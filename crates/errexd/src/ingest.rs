@@ -1,8 +1,9 @@
 //! HTTP ingest + browser-facing API server.
 //!
-//! Serves three categories of routes off port 9090:
+//! Serves four categories of routes off port 9090:
 //!   - `/health`, `/api/:project/envelope/`     — operations + Sentry SDK ingest
 //!   - `/api/projects`, `/api/issues`           — JSON for the SPA
+//!   - `/ws/:project`                           — fan-out WebSocket (axum upgrade)
 //!   - everything else                          — embedded SvelteKit SPA
 //!
 //! Routing is intentionally flat so it's easy to add `/api/<project>/store/`
@@ -122,6 +123,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/admin/users/:u/sessions/revoke-all",
             post(admin_revoke_user_sessions),
         )
+        // ----- websocket fan-out -----
+        // Must be a real route (not the SPA fallback) so the upgrade
+        // handshake gets `101 Switching Protocols` instead of `200 +
+        // index.html`. See crate::ws for the full background.
+        .route("/ws/:project", get(crate::ws::handle))
         .with_state(state)
         .fallback(spa::handler)
 }
@@ -741,9 +747,7 @@ async fn ingest_envelope(
             return (StatusCode::UNAUTHORIZED, "missing sentry_key").into_response();
         };
         match state.store.project_by_token(&key).await {
-            Ok(Some(p)) if p.name == project => {
-                state.store.touch_project_used(&p.name).await;
-            }
+            Ok(Some(p)) if p.name == project => {}
             Ok(_) => {
                 return (StatusCode::UNAUTHORIZED, "invalid sentry_key for project")
                     .into_response();
@@ -782,6 +786,8 @@ async fn ingest_envelope(
     if events.is_empty() {
         // Sentry SDKs send envelopes that contain only sessions or
         // transactions; that's not an error, just nothing for us yet.
+        // Still bump telemetry — SDK is alive even if it sent no events.
+        state.store.touch_project_used(&project).await;
         return StatusCode::OK.into_response();
     }
 
@@ -795,10 +801,16 @@ async fn ingest_envelope(
             .await
             .is_err()
         {
+            // Digest receiver gone = shutting down. Don't bump telemetry
+            // for a request we didn't actually accept.
             return (StatusCode::SERVICE_UNAVAILABLE, "shutting down").into_response();
         }
     }
 
+    // Telemetry: SPA's project header reads `last_used_at` for the "last
+    // event" line, so it must reflect SDK liveness regardless of whether
+    // ingest auth is enabled. Bump only after the envelope was accepted.
+    state.store.touch_project_used(&project).await;
     StatusCode::OK.into_response()
 }
 

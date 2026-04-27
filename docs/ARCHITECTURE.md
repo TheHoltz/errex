@@ -17,9 +17,13 @@ SDK ──HTTP─▶  /api/<proj>/envelope/  ─▶  │  digest task       │
                                             │          │
                               ┌─────────────┴──┐  ┌────┴───────┐
                               ▼                ▼  ▼            ▼
-                     /api/issues, /event   webhook task    WebSocket fan-out
-                     (REST, embedded SPA)   (POST out)     :9091 → SPA
+                     /api/issues, /event   webhook task    /ws/<proj> upgrade
+                     (REST, embedded SPA)   (POST out)     (axum, same :9090)
 ```
+
+Both REST and the WebSocket fan-out share the axum listener on `:9090`
+— the SPA's WS URL is built from `location.host`, so unifying the ports
+keeps the upgrade reachable in production without env-time configuration.
 
 Three things move through this pipeline:
 
