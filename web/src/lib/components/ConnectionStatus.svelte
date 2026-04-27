@@ -9,11 +9,15 @@
     connection.status === 'reconnecting' || connection.status === 'connecting'
   );
 
+  // Silence is good news: connected = muted (same weight as Freshness),
+  // pending = amber pulse, disconnected = destructive. No saturated green
+  // baseline — it competes with the active-nav rail and trains the eye to
+  // ignore real status changes.
   const iconClass = $derived(
     cn(
-      'h-[18px] w-[18px]',
+      'h-4 w-4',
       isConnected
-        ? 'text-emerald-500'
+        ? 'text-muted-foreground/70'
         : isPending
           ? 'text-amber-500 animate-pulse'
           : 'text-destructive'
@@ -29,13 +33,13 @@
 
 <Tooltip.Root>
   <Tooltip.Trigger
-    class="text-muted-foreground hover:text-foreground hover:bg-accent inline-flex h-10 w-10 items-center justify-center rounded-md transition-colors"
+    class="text-muted-foreground/70 inline-flex h-8 w-8 items-center justify-center rounded-md"
     aria-label={label}
   >
     {#if isConnected || isPending}
-      <Wifi class={iconClass} />
+      <Wifi class={iconClass} strokeWidth={1.75} />
     {:else}
-      <WifiOff class={iconClass} />
+      <WifiOff class={iconClass} strokeWidth={1.75} />
     {/if}
   </Tooltip.Trigger>
   <Tooltip.Content side="right">

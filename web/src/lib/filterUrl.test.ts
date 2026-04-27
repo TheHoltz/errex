@@ -10,7 +10,9 @@ describe('serializeFilterParams', () => {
     const p = serializeFilterParams({
       query: '',
       statuses: new Set<IssueStatus>(['unresolved']),
-      levels: new Set<IssueLevel>()
+      levels: new Set<IssueLevel>(),
+      sinceMs: null,
+      spikingOnly: false
     });
     expect(p.has('q')).toBe(false);
   });
@@ -19,7 +21,9 @@ describe('serializeFilterParams', () => {
     const p = serializeFilterParams({
       query: '',
       statuses: new Set<IssueStatus>(['unresolved']),
-      levels: new Set<IssueLevel>()
+      levels: new Set<IssueLevel>(),
+      sinceMs: null,
+      spikingOnly: false
     });
     expect(p.has('s')).toBe(false);
   });
@@ -28,7 +32,9 @@ describe('serializeFilterParams', () => {
     const p = serializeFilterParams({
       query: '',
       statuses: new Set<IssueStatus>(['resolved', 'muted']),
-      levels: new Set<IssueLevel>()
+      levels: new Set<IssueLevel>(),
+      sinceMs: null,
+      spikingOnly: false
     });
     expect(p.get('s')).toBe('muted,resolved');
   });
@@ -37,7 +43,9 @@ describe('serializeFilterParams', () => {
     const p = serializeFilterParams({
       query: '',
       statuses: new Set<IssueStatus>(['unresolved']),
-      levels: new Set<IssueLevel>()
+      levels: new Set<IssueLevel>(),
+      sinceMs: null,
+      spikingOnly: false
     });
     expect(p.has('l')).toBe(false);
   });
@@ -46,7 +54,9 @@ describe('serializeFilterParams', () => {
     const p = serializeFilterParams({
       query: '',
       statuses: new Set<IssueStatus>(['unresolved']),
-      levels: new Set<IssueLevel>(['fatal', 'error'])
+      levels: new Set<IssueLevel>(['fatal', 'error']),
+      sinceMs: null,
+      spikingOnly: false
     });
     expect(p.get('l')).toBe('error,fatal');
   });
@@ -55,7 +65,9 @@ describe('serializeFilterParams', () => {
     const p = serializeFilterParams({
       query: 'auth fail',
       statuses: new Set<IssueStatus>(['unresolved']),
-      levels: new Set<IssueLevel>()
+      levels: new Set<IssueLevel>(),
+      sinceMs: null,
+      spikingOnly: false
     });
     expect(p.get('q')).toBe('auth fail');
   });
@@ -93,12 +105,53 @@ describe('parseFilterParams', () => {
     const initial = {
       query: 'auth',
       statuses: new Set<IssueStatus>(['resolved', 'muted']),
-      levels: new Set<IssueLevel>(['error', 'fatal'])
+      levels: new Set<IssueLevel>(['error', 'fatal']),
+      sinceMs: null,
+      spikingOnly: false
     };
     const round = parseFilterParams(serializeFilterParams(initial));
     expect(round.query).toBe('auth');
     expect([...round.statuses].sort()).toEqual(['muted', 'resolved']);
     expect([...round.levels].sort()).toEqual(['error', 'fatal']);
+  });
+
+  it('round-trips since=1h and spike=1', () => {
+    const round = parseFilterParams(
+      serializeFilterParams({
+        query: '',
+        statuses: new Set<IssueStatus>(['unresolved']),
+        levels: new Set<IssueLevel>(),
+        sinceMs: 60 * 60 * 1000,
+        spikingOnly: true
+      })
+    );
+    expect(round.sinceMs).toBe(60 * 60 * 1000);
+    expect(round.spikingOnly).toBe(true);
+  });
+
+  it('omits since/spike from the URL when defaults', () => {
+    const p = serializeFilterParams({
+      query: '',
+      statuses: new Set<IssueStatus>(['unresolved']),
+      levels: new Set<IssueLevel>(),
+      sinceMs: null,
+      spikingOnly: false
+    });
+    expect(p.has('since')).toBe(false);
+    expect(p.has('spike')).toBe(false);
+  });
+
+  it('parses recognised since presets only (1h, 24h, 7d)', () => {
+    expect(parseFilterParams(new URLSearchParams('since=1h')).sinceMs).toBe(60 * 60 * 1000);
+    expect(parseFilterParams(new URLSearchParams('since=24h')).sinceMs).toBe(24 * 60 * 60 * 1000);
+    expect(parseFilterParams(new URLSearchParams('since=7d')).sinceMs).toBe(7 * 24 * 60 * 60 * 1000);
+    expect(parseFilterParams(new URLSearchParams('since=bogus')).sinceMs).toBeNull();
+  });
+
+  it('parses spike=1 as true; anything else as false', () => {
+    expect(parseFilterParams(new URLSearchParams('spike=1')).spikingOnly).toBe(true);
+    expect(parseFilterParams(new URLSearchParams('spike=0')).spikingOnly).toBe(false);
+    expect(parseFilterParams(new URLSearchParams('')).spikingOnly).toBe(false);
   });
 
   it('treats every recognised status/level as round-trippable', () => {
@@ -107,7 +160,9 @@ describe('parseFilterParams', () => {
         serializeFilterParams({
           query: '',
           statuses: new Set<IssueStatus>([s]),
-          levels: new Set<IssueLevel>()
+          levels: new Set<IssueLevel>(),
+          sinceMs: null,
+          spikingOnly: false
         })
       );
       expect(round.statuses.has(s)).toBe(true);
@@ -117,7 +172,9 @@ describe('parseFilterParams', () => {
         serializeFilterParams({
           query: '',
           statuses: new Set<IssueStatus>(['unresolved']),
-          levels: new Set<IssueLevel>([l])
+          levels: new Set<IssueLevel>([l]),
+          sinceMs: null,
+          spikingOnly: false
         })
       );
       expect(round.levels.has(l)).toBe(true);

@@ -48,6 +48,8 @@
     filter.query = next.query;
     filter.statuses = next.statuses;
     filter.levels = next.levels;
+    filter.sinceMs = next.sinceMs;
+    filter.spikingOnly = next.spikingOnly;
   });
 
   // Push filter state into the URL so the active filter is reload-safe and
@@ -58,7 +60,9 @@
     const params = serializeFilterParams({
       query: filter.query,
       statuses: filter.statuses,
-      levels: filter.levels
+      levels: filter.levels,
+      sinceMs: filter.sinceMs,
+      spikingOnly: filter.spikingOnly
     });
     const search = params.toString();
     const target = location.pathname + (search ? `?${search}` : '') + location.hash;
@@ -67,7 +71,14 @@
     }
   });
 
-  const visible = $derived(visibleIssues());
+  // Re-evaluate when the 5 s tick advances so the since/spiking filters
+  // stay current without each consumer wiring its own setInterval.
+  const visible = $derived.by(() => {
+    void eventStream.tick;
+    return visibleIssues({
+      isSpiking: (id: number) => eventStream.isSpiking(id)
+    });
+  });
 
   type StatusChip = {
     key: IssueStatus;
@@ -113,8 +124,17 @@
     filter.query.trim().length > 0 ||
       filter.statuses.size !== 1 ||
       !filter.statuses.has('unresolved') ||
-      filter.levels.size > 0
+      filter.levels.size > 0 ||
+      filter.sinceMs != null ||
+      filter.spikingOnly
   );
+
+  function sinceLabel(ms: number): string {
+    if (ms === 60 * 60 * 1000) return '1h';
+    if (ms === 24 * 60 * 60 * 1000) return '24h';
+    if (ms === 7 * 24 * 60 * 60 * 1000) return '7d';
+    return `${Math.round(ms / 60000)}m`;
+  }
 
   // Stable, human-readable order for the readout: matches the chip row.
   const STATUS_ORDER: IssueStatus[] = ['unresolved', 'resolved', 'muted', 'ignored'];
@@ -131,6 +151,8 @@
     filter.query = '';
     filter.statuses = new Set<IssueStatus>(['unresolved']);
     filter.levels = new Set<IssueLevel>();
+    filter.sinceMs = null;
+    filter.spikingOnly = false;
   }
 </script>
 
@@ -287,6 +309,15 @@
         <span class="text-border">·</span>
         <span>level:</span>
         <span class="text-foreground">{levelReadout}</span>
+      {/if}
+      {#if filter.sinceMs != null}
+        <span class="text-border">·</span>
+        <span>since:</span>
+        <span class="text-foreground">{sinceLabel(filter.sinceMs)}</span>
+      {/if}
+      {#if filter.spikingOnly}
+        <span class="text-border">·</span>
+        <span class="text-amber-500">spiking only</span>
       {/if}
       <Button
         variant="link"

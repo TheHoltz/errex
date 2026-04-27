@@ -8,10 +8,21 @@ export interface FilterState {
   query: string;
   statuses: Set<IssueStatus>;
   levels: Set<IssueLevel>;
+  sinceMs: number | null;
+  spikingOnly: boolean;
 }
 
 const ALL_STATUSES: IssueStatus[] = ['unresolved', 'resolved', 'muted', 'ignored'];
 const ALL_LEVELS: IssueLevel[] = ['debug', 'info', 'warning', 'error', 'fatal'];
+
+// Whitelisted "since" presets. Keeping the URL token symbolic (1h/24h/7d)
+// rather than raw milliseconds means a stale share link can't smuggle in
+// an arbitrary window, and the encoded URL stays human-readable.
+const SINCE_PRESETS: Record<string, number> = {
+  '1h': 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000
+};
 
 function setEqualsDefaultStatuses(s: Set<IssueStatus>): boolean {
   return s.size === 1 && s.has('unresolved');
@@ -21,11 +32,23 @@ function csvSorted<T extends string>(s: Set<T>): string {
   return [...s].sort().join(',');
 }
 
+function sinceMsToToken(ms: number): string | null {
+  for (const [token, value] of Object.entries(SINCE_PRESETS)) {
+    if (value === ms) return token;
+  }
+  return null;
+}
+
 export function serializeFilterParams(f: FilterState): URLSearchParams {
   const p = new URLSearchParams();
   if (f.query.trim().length > 0) p.set('q', f.query);
   if (!setEqualsDefaultStatuses(f.statuses)) p.set('s', csvSorted(f.statuses));
   if (f.levels.size > 0) p.set('l', csvSorted(f.levels));
+  if (f.sinceMs != null) {
+    const token = sinceMsToToken(f.sinceMs);
+    if (token) p.set('since', token);
+  }
+  if (f.spikingOnly) p.set('spike', '1');
   return p;
 }
 
@@ -59,5 +82,10 @@ export function parseFilterParams(p: URLSearchParams): FilterState {
             .filter((t): t is IssueLevel => (ALL_LEVELS as string[]).includes(t))
         );
 
-  return { query, statuses, levels };
+  const sinceRaw = p.get('since');
+  const sinceMs = sinceRaw != null && sinceRaw in SINCE_PRESETS ? SINCE_PRESETS[sinceRaw]! : null;
+
+  const spikingOnly = p.get('spike') === '1';
+
+  return { query, statuses, levels, sinceMs, spikingOnly };
 }

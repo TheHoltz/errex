@@ -47,6 +47,14 @@ class FilterStore {
   // single-element set, since "no level filter" is the much more common
   // resting state.
   levels = $state<Set<IssueLevel>>(new Set());
+  // Window in ms applied to `first_seen`; null = no since filter. Driven
+  // from header chips ("New (1h)") so the live counters double as filter
+  // entry points.
+  sinceMs = $state<number | null>(null);
+  // When true, visibleIssues drops every issue that is not currently
+  // spiking. The actual spike predicate lives in `eventStream` and is
+  // passed in at call-time to keep this module pure.
+  spikingOnly = $state(false);
 
   toggleStatus(s: IssueStatus) {
     const next = new Set(this.statuses);
@@ -102,9 +110,22 @@ export const load = new LoadStore();
 // IssueUpdated WS messages and persisted in SQLite). Earlier iterations
 // kept this in localStorage; that gave each browser its own truth and was
 // wrong for any team larger than one.
-export function visibleIssues(): Issue[] {
+export interface VisibleIssuesOpts {
+  /** Wall-clock used by the `sinceMs` filter. Defaults to Date.now(). */
+  now?: number;
+  /**
+   * Spike predicate, supplied by the caller (typically backed by
+   * `eventStream.isSpiking`). Kept as a parameter so this module stays
+   * pure and unit-testable without standing up the WS event stream.
+   */
+  isSpiking?: (id: number) => boolean;
+}
+
+export function visibleIssues(opts: VisibleIssuesOpts = {}): Issue[] {
   const q = filter.query.trim().toLowerCase();
   const levelFilter = filter.levels;
+  const now = opts.now ?? Date.now();
+  const sinceCutoff = filter.sinceMs == null ? null : now - filter.sinceMs;
   return issues.list.filter((i) => {
     if (i.project !== projects.current) return false;
     if (!filter.statuses.has(i.status)) return false;
@@ -114,6 +135,15 @@ export function visibleIssues(): Issue[] {
       // dropping them is correct — "show me only fatals" should not
       // accidentally include unlabelled rows.
       if (!(lvl && levelFilter.has(lvl as IssueLevel))) return false;
+    }
+    if (sinceCutoff != null) {
+      const seen = Date.parse(i.first_seen);
+      // Drop rows whose timestamp won't parse rather than risk including
+      // them via a NaN comparison short-circuit.
+      if (!Number.isFinite(seen) || seen < sinceCutoff) return false;
+    }
+    if (filter.spikingOnly) {
+      if (!opts.isSpiking || !opts.isSpiking(i.id)) return false;
     }
     if (q && !matches(i, q)) return false;
     return true;
