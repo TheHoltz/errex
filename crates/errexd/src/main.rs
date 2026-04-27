@@ -180,10 +180,29 @@ async fn main() -> anyhow::Result<()> {
     };
 
     tracing::info!(
-        "errexd listening on :{} (http+ws), :{} (mcp)",
-        cfg.http_port,
+        "errexd listening on :{} (http+ws), :{} (mcp), public_url={}",
+        cfg.resolved_http_port(),
         cfg.mcp_port,
+        cfg.public_url,
     );
+
+    // "Forgot to set the domain" foot-gun: daemon is on a public bind
+    // (0.0.0.0 or anything non-loopback) but `public_url` is the local
+    // fallback. The DSN handed to SDKs and the URL embedded in webhook
+    // payloads will point at `localhost:9090`, which is useless to
+    // remote callers. Warn loudly at boot — the operator usually
+    // forgot the env var on the first deploy.
+    let bind_host_is_loopback = cfg.http_host == "127.0.0.1" || cfg.http_host == "::1";
+    if cfg.public_url_is_default() && !bind_host_is_loopback {
+        tracing::warn!(
+            bind_host = %cfg.http_host,
+            public_url = %cfg.public_url,
+            "ERREXD_PUBLIC_URL is the default 'http://localhost:9090' but the daemon \
+             is bound to a public interface. Set ERREXD_PUBLIC_URL to the public \
+             hostname (e.g. https://errex.example.com) so DSNs and webhook links \
+             work for remote SDKs and Slack alerts.",
+        );
+    }
 
     // Block on either Ctrl-C or any subsystem error.
     tokio::select! {

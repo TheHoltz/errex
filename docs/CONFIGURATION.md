@@ -11,16 +11,78 @@ self-host.
 | Variable | Default | What it does |
 |---|---|---|
 | `ERREXD_DATA_DIR` | `./data` | SQLite file location |
-| `ERREXD_HTTP_PORT` | `9090` | HTTP + SPA + WebSocket fan-out (single axum listener) |
+| `ERREXD_HTTP_PORT` | `PORT` env, else `9090` | HTTP + SPA + WebSocket fan-out (single axum listener). Reads `PORT` automatically so Railway / Fly / Render / Heroku one-click deploys "just work". |
 | `ERREXD_MCP_PORT` | `9092` | MCP listener (stub) |
 | `ERREXD_LOG_LEVEL` | `info` | tracing filter |
 | `ERREXD_DEV_MODE` | `false` | Enable CORS for the Vite dev server |
 | `ERREXD_REQUIRE_AUTH` | `false` | Validate `sentry_key` on ingest |
 | `ERREXD_RETENTION_DAYS` | `30` | Purge events older than N days; `0` disables |
-| `ERREXD_RATE_LIMIT_PER_MIN` | `0` | Per-project ingest cap; `0` = unlimited |
+| `ERREXD_RATE_LIMIT_PER_MIN` | `6000` | Per-project ingest cap; `0` = unlimited |
 | `ERREXD_RATE_LIMIT_BURST` | `200` | Token-bucket burst capacity |
-| `ERREXD_PUBLIC_URL` | `http://localhost:9090` | Embedded in webhook payloads |
+| `ERREXD_PUBLIC_URL` | `http://localhost:9090` | **Set this for any non-localhost deployment.** Embedded in DSNs, webhook payloads, and the dashboard's curl example. The daemon warns at boot if you bound to a public interface but left this at the default. |
 | `ERREXD_ADMIN_TOKEN` | _(unset)_ | Setup-wizard token; required to bootstrap the first admin user |
+
+## Custom domain — one env var
+
+To put errex behind `https://errex.example.com`, set exactly one variable:
+
+```bash
+ERREXD_PUBLIC_URL=https://errex.example.com
+```
+
+That's it. The DSN handed to SDKs becomes
+`https://<token>@errex.example.com/<project>` (the canonical Sentry shape
+every SDK parses). Webhook payloads link back to
+`https://errex.example.com/issues/<id>`. The dashboard's curl example
+points at `https://errex.example.com/api/<project>/envelope/`.
+
+Per-platform recipes:
+
+### Railway / Fly / Render / Heroku
+
+1. Add a custom domain in the platform UI.
+2. Set the service env vars:
+   - `ERREXD_PUBLIC_URL=https://errex.example.com`
+   - `ERREXD_ADMIN_TOKEN=$(openssl rand -hex 16)` (first run only)
+3. Deploy. The platform sets `PORT`; errexd reads it automatically.
+   No `ERREXD_HTTP_PORT` override needed.
+
+### Caddy
+
+```Caddyfile
+errex.example.com {
+    reverse_proxy localhost:9090
+}
+```
+
+```bash
+ERREXD_PUBLIC_URL=https://errex.example.com docker compose -f docker/docker-compose.yml up -d
+```
+
+Caddy handles TLS automatically.
+
+### Nginx / Traefik
+
+Forward `Host`, `X-Forwarded-Proto`, and the `Upgrade`/`Connection`
+headers required for the WebSocket. The SPA builds its WS URL from
+`window.location`, so as long as the proxy upgrade path is wired,
+realtime updates work without extra config.
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name errex.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:9090;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+    }
+}
+```
 
 ### Ports
 

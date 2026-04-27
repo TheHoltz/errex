@@ -16,8 +16,13 @@ pub struct Config {
     #[arg(long, env = "ERREXD_HTTP_HOST", default_value = "0.0.0.0")]
     pub http_host: String,
 
-    #[arg(long, env = "ERREXD_HTTP_PORT", default_value_t = 9090)]
-    pub http_port: u16,
+    /// HTTP port. Reads from `ERREXD_HTTP_PORT` first, else falls back to
+    /// `PORT` (the convention Railway / Fly / Heroku / Render all set on
+    /// their side), else defaults to 9090. The fallback chain is what
+    /// makes a one-click deploy "just work" without operator
+    /// boilerplate. Resolved by [`Config::resolved_http_port`].
+    #[arg(long, env = "ERREXD_HTTP_PORT")]
+    pub http_port: Option<u16>,
 
     /// Bind address for the MCP server (AI agents). Stub for now.
     #[arg(long, env = "ERREXD_MCP_HOST", default_value = "0.0.0.0")]
@@ -84,8 +89,21 @@ pub struct Config {
 }
 
 impl Config {
+    /// `ERREXD_HTTP_PORT` > `PORT` (PaaS convention) > 9090 default.
+    pub fn resolved_http_port(&self) -> u16 {
+        if let Some(p) = self.http_port {
+            return p;
+        }
+        if let Ok(s) = std::env::var("PORT") {
+            if let Ok(p) = s.parse::<u16>() {
+                return p;
+            }
+        }
+        9090
+    }
+
     pub fn http_addr(&self) -> SocketAddr {
-        format!("{}:{}", self.http_host, self.http_port)
+        format!("{}:{}", self.http_host, self.resolved_http_port())
             .parse()
             .expect("valid http bind addr")
     }
@@ -94,6 +112,15 @@ impl Config {
         format!("{}:{}", self.mcp_host, self.mcp_port)
             .parse()
             .expect("valid mcp bind addr")
+    }
+
+    /// Default `public_url` is the local-loopback fallback. Detect it so
+    /// `main` can log a warning when the daemon is bound to a public
+    /// interface but the operator forgot to set `ERREXD_PUBLIC_URL` to
+    /// the real hostname — DSNs and webhook links would otherwise point
+    /// at `localhost:9090` which is useless to remote SDKs.
+    pub fn public_url_is_default(&self) -> bool {
+        self.public_url == "http://localhost:9090"
     }
 }
 
@@ -113,5 +140,24 @@ mod tests {
             "rate_limit_per_min default must be > 0, got {}",
             cfg.rate_limit_per_min
         );
+    }
+
+    /// Explicit `--http-port` always wins over the PORT env fallback.
+    /// We don't mutate env vars in tests (cargo runs tests in
+    /// parallel; PORT manipulation would race with other tests reading
+    /// env), so this asserts only the deterministic path: explicit
+    /// value present → use it.
+    #[test]
+    fn resolved_http_port_explicit_wins() {
+        let cfg = Config::parse_from(["errexd", "--http-port", "12345"]);
+        assert_eq!(cfg.resolved_http_port(), 12345);
+    }
+
+    #[test]
+    fn public_url_default_detection() {
+        let cfg = Config::parse_from(["errexd"]);
+        assert!(cfg.public_url_is_default());
+        let cfg2 = Config::parse_from(["errexd", "--public-url", "https://errex.example.com"]);
+        assert!(!cfg2.public_url_is_default());
     }
 }
