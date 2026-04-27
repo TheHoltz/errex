@@ -90,6 +90,28 @@ explicitly in the log entry before implementing.
   not a WAL checkpoint stall. Tail-latency optimization (hypothesis 3
   in the bank) is now low priority unless it resurfaces.
 
+### Iteration 2 — multi-row event INSERT
+
+- **hypothesis (bank #2):** replace per-event `INSERT INTO events ...`
+  loop in `Store::upsert_batch_with_events` with one `INSERT ... VALUES
+  (?,?,?), (?,?,?), ...` for the whole batch. Build via
+  `sqlx::QueryBuilder::push_values`.
+- **changed:** `crates/errexd/src/store.rs` (events INSERT lifted out
+  of the per-input loop, batched after issue upsert phase).
+- **bench:** `{"achieved_rps":3748.5,"p99_ms":5.24,"max_ms":54.21,"rss_max_mb":27.69,"errors":0,"efficiency_eps_per_mb":135.37}`
+- **delta vs running best (iter-1, 164.23):** efficiency -17.6%
+  (164.23 → 135.37). RSS +21% (22.83 → 27.69 MB). max regressed
+  +377% (11.36 → 54.21 ms). Throughput unchanged.
+- **decision:** REVERTED via `git restore .`.
+- **notes:** Multi-row INSERT didn't move throughput — events INSERT
+  was already cheap (sqlx prepared-statement cache covers the per-row
+  parse). What it DID do: `QueryBuilder` builds a fresh SQL string
+  + bind buffer per batch (variable N, can't be cached), pushing RSS
+  up ~5 MB. Since efficiency metric penalizes RSS, this is a clear
+  regression. Throughput bottleneck must be elsewhere — likely the
+  issue UPSERT's BEGIN+SELECT+UPDATE round-trips, not the event
+  insert.
+
 ### Iteration 1 — pre-serialize JSON + event_id in HTTP handler
 
 - **hypothesis (bank #1 + #4):** move `serde_json::to_string(event)` and
