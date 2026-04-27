@@ -72,7 +72,7 @@ Each finding is keyed to the source location it lives in.
 
 ### F3. Default rate-limit is OFF — self-host can be unboundedly hammered
 
-- **Where**: [crates/errexd/src/config.rs:55-56](../../crates/errexd/src/config.rs#L55-L56) — `ERREXD_RATE_LIMIT_PER_MIN` default = `0` ⇒ disabled.
+- **Where**: [crates/errexd/src/config.rs:55-56](../../crates/errexd/src/config.rs#L55-L56) — `ERREX_RATE_LIMIT_PER_MIN` default = `0` ⇒ disabled.
 - **Evidence**: 0× 429s across all scenarios, including 8000 RPS targets.
 - **Recommendation**: ship a non-zero default for self-host (e.g., 6000/min ≈ 100 RPS per project, burst 200) and document that it is per-project. The current zero default invites a misbehaving SDK to consume the whole digest budget on a small VM. The token bucket itself is solid ([rate_limit.rs:16-44](../../crates/errexd/src/rate_limit.rs#L16-L44)).
 

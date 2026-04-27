@@ -51,13 +51,13 @@ pub struct AppState {
     /// One-shot setup secret consumed by `/api/auth/setup` while the
     /// `users` table is empty. After the first user exists, this value is
     /// effectively dead — the setup endpoint refuses to fire again. Wired
-    /// through `ERREXD_ADMIN_TOKEN` for upgrade compatibility with the
+    /// through `ERREX_ADMIN_TOKEN` for upgrade compatibility with the
     /// previous bearer-auth deployment.
     pub setup_token: Option<String>,
     /// Public-facing URL for this daemon. Embedded in DSNs returned to the
     /// SPA so SDKs configured by users land on the right host.
     pub public_url: String,
-    /// True when the operator started the daemon with `ERREXD_DEV_MODE`.
+    /// True when the operator started the daemon with `ERREX_DEV_MODE`.
     /// Relaxes cookie security flags so cookies issued over `http://`
     /// localhost are accepted by browsers (which refuse `Secure` over
     /// non-https).
@@ -214,12 +214,19 @@ async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn list_projects(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<crate::store::ProjectSummary>>, ApiError> {
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    // Read endpoints leak production stack traces (which routinely contain
+    // request bodies, secrets, env values), so they are auth-gated. Any
+    // signed-in user — including viewers — may read.
+    if let Err(resp) = crate::auth::require_auth(&state, &headers).await {
+        return Ok(resp);
+    }
     // One round-trip with GROUP BY beats loading every issue and counting
     // in the handler. Self-host pequeno may have thousands of issues; we
     // don't want to materialize them all just to return four numbers.
     let projects = state.store.project_summaries().await?;
-    Ok(Json(projects))
+    Ok(Json(projects).into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -229,13 +236,17 @@ struct IssueQuery {
 
 async fn list_issues(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<IssueQuery>,
-) -> Result<Json<Vec<errex_proto::Issue>>, ApiError> {
+) -> Result<Response, ApiError> {
+    if let Err(resp) = crate::auth::require_auth(&state, &headers).await {
+        return Ok(resp);
+    }
     let issues = match q.project {
         Some(project) => state.store.list_issues_by_project(&project).await?,
         None => state.store.load_issues().await?,
     };
-    Ok(Json(issues))
+    Ok(Json(issues).into_response())
 }
 
 /// PUT /api/issues/:id/status — sets triage status. The body is
@@ -250,8 +261,14 @@ struct StatusBody {
 async fn put_status(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
+    headers: axum::http::HeaderMap,
     body: Option<Json<StatusBody>>,
 ) -> Result<Response, ApiError> {
+    // Triage mutation is admin-only — a read-only viewer cannot silence
+    // alerts on a compromised account.
+    if let Err(resp) = crate::auth::require_admin(&state, &headers).await {
+        return Ok(resp);
+    }
     let Some(Json(body)) = body else {
         return Ok((StatusCode::BAD_REQUEST, "invalid status body").into_response());
     };
@@ -280,7 +297,11 @@ async fn put_status(
 async fn latest_event(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
+    if let Err(resp) = crate::auth::require_auth(&state, &headers).await {
+        return Ok(resp);
+    }
     match state.store.latest_event(id).await? {
         Some(stored) => Ok(Json(stored).into_response()),
         None => Ok((StatusCode::NOT_FOUND, "no event for issue").into_response()),
@@ -360,7 +381,7 @@ impl AdminProjectView {
 }
 
 /// Bridges `/api/admin/*` handlers to the cookie-session model. Earlier
-/// versions accepted a shared `Authorization: Bearer ERREXD_ADMIN_TOKEN`;
+/// versions accepted a shared `Authorization: Bearer ERREX_ADMIN_TOKEN`;
 /// after the multi-user migration that token is consumed by the setup
 /// wizard once and then forever ignored. Admin endpoints now require:
 ///

@@ -5,7 +5,7 @@
 //!
 //! Settings are read from the `retention_settings` row each tick (cheap)
 //! so an operator can tighten retention via the SPA without redeploying
-//! the daemon. The CLI flag (`ERREXD_RETENTION_DAYS`) remains the boot
+//! the daemon. The CLI flag (`ERREX_RETENTION_DAYS`) remains the boot
 //! default for *event age* — it kicks in when the DB-level
 //! `event_retention_days` is 0 (the migration default).
 

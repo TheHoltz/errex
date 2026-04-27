@@ -27,5 +27,5 @@ are no released versions yet.
 
 - Issues that require physical access to the host running errex.
 - DoS via unbounded ingest when the operator hasn't set
-  `ERREXD_RATE_LIMIT_PER_MIN` (rate limiting is opt-in by default).
+  `ERREX_RATE_LIMIT_PER_MIN` (rate limiting is opt-in by default).
 - Findings against deprecated / removed code paths in `git log`.

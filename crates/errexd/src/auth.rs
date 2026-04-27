@@ -17,7 +17,7 @@
 //!     session, or 401.
 //!
 //! Cookie attributes: `HttpOnly` (no JS access — XSS resistance), `Secure`
-//! (skipped in `ERREXD_DEV_MODE` so `http://localhost` works), `SameSite=Strict`
+//! (skipped in `ERREX_DEV_MODE` so `http://localhost` works), `SameSite=Strict`
 //! (CSRF resistance — the SPA is same-origin so this costs us nothing),
 //! `Path=/`, `Max-Age=2592000` (30 days, sliding via `touch_session`).
 
@@ -187,7 +187,7 @@ pub async fn handle_setup(
     let Some(expected) = state.setup_token.as_deref() else {
         return Ok((
             StatusCode::SERVICE_UNAVAILABLE,
-            "setup is disabled (set ERREXD_ADMIN_TOKEN to enable)",
+            "setup is disabled (set ERREX_ADMIN_TOKEN to enable)",
         )
             .into_response());
     };

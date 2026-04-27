@@ -197,8 +197,8 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(
             bind_host = %cfg.http_host,
             public_url = %cfg.public_url,
-            "ERREXD_PUBLIC_URL is the default 'http://localhost:9090' but the daemon \
-             is bound to a public interface. Set ERREXD_PUBLIC_URL to the public \
+            "ERREX_PUBLIC_URL is the default 'http://localhost:9090' but the daemon \
+             is bound to a public interface. Set ERREX_PUBLIC_URL to the public \
              hostname (e.g. https://errex.example.com) so DSNs and webhook links \
              work for remote SDKs and Slack alerts.",
         );

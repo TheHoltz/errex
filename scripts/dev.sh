@@ -2,7 +2,7 @@
 # Run errexd + the SvelteKit dev server in parallel for local iteration.
 #
 #   - errexd binds :9090 (HTTP+WS, same axum listener) and :9092 (MCP stub)
-#     and runs with ERREXD_DEV_MODE=true so its CORS policy permits direct
+#     and runs with ERREX_DEV_MODE=true so its CORS policy permits direct
 #     fetches from the Vite dev server on :5173.
 #   - bun run dev binds :5173 with /api and /ws proxied to the daemon.
 #
@@ -26,9 +26,9 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "[dev] starting errexd on :9090 (HTTP+WS, dev mode)"
-ERREXD_DEV_MODE=true \
-ERREXD_LOG_LEVEL="${ERREXD_LOG_LEVEL:-info}" \
-ERREXD_ADMIN_TOKEN="${ERREXD_ADMIN_TOKEN:-123}" \
+ERREX_DEV_MODE=true \
+ERREX_LOG_LEVEL="${ERREX_LOG_LEVEL:-info}" \
+ERREX_ADMIN_TOKEN="${ERREX_ADMIN_TOKEN:-123}" \
   cargo run --quiet --bin errexd &
 pids+=("$!")
 

@@ -256,11 +256,13 @@ async fn metrics_rate_limit_rejection_counted() {
 
 #[tokio::test]
 async fn list_projects_returns_empty_array_when_no_issues() {
-    let (router, _store, _dir) = fixture().await;
+    let (router, store, _dir) = fixture().await;
+    let cookie = signed_in_cookie(&store, store::Role::Viewer).await;
     let res = router
         .oneshot(
             Request::builder()
                 .uri("/api/projects")
+                .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -274,6 +276,7 @@ async fn list_projects_returns_empty_array_when_no_issues() {
 #[tokio::test]
 async fn list_projects_groups_by_project() {
     let (router, store, _dir) = fixture().await;
+    let cookie = signed_in_cookie(&store, store::Role::Viewer).await;
     let now = Utc::now();
     store
         .upsert_issue("alpha", &Fingerprint::new("a"), "T", None, None, now)
@@ -287,6 +290,7 @@ async fn list_projects_groups_by_project() {
         .oneshot(
             Request::builder()
                 .uri("/api/projects")
+                .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -305,6 +309,7 @@ async fn list_issues_includes_status_field() {
     // wire path so a refactor that drops the column from the SELECT trips
     // a red bar.
     let (router, store, _dir) = fixture().await;
+    let cookie = signed_in_cookie(&store, store::Role::Viewer).await;
     store
         .upsert_issue("p", &Fingerprint::new("a"), "T", None, None, Utc::now())
         .await
@@ -313,6 +318,7 @@ async fn list_issues_includes_status_field() {
         .oneshot(
             Request::builder()
                 .uri("/api/issues")
+                .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -332,6 +338,7 @@ async fn list_issues_includes_status_field() {
 #[tokio::test]
 async fn put_status_updates_issue() {
     let (router, store, _dir) = fixture().await;
+    let cookie = admin_cookie(&store).await;
     let r = store
         .upsert_issue("p", &Fingerprint::new("a"), "T", None, None, Utc::now())
         .await
@@ -343,6 +350,7 @@ async fn put_status_updates_issue() {
                 .method("PUT")
                 .uri(format!("/api/issues/{}/status", r.issue.id))
                 .header("content-type", "application/json")
+                .header("cookie", &cookie)
                 .body(Body::from(r#"{"status":"resolved"}"#))
                 .unwrap(),
         )
@@ -360,13 +368,15 @@ async fn put_status_updates_issue() {
 
 #[tokio::test]
 async fn put_status_returns_404_for_unknown_id() {
-    let (router, _store, _dir) = fixture().await;
+    let (router, store, _dir) = fixture().await;
+    let cookie = admin_cookie(&store).await;
     let res = router
         .oneshot(
             Request::builder()
                 .method("PUT")
                 .uri("/api/issues/999999/status")
                 .header("content-type", "application/json")
+                .header("cookie", &cookie)
                 .body(Body::from(r#"{"status":"resolved"}"#))
                 .unwrap(),
         )
@@ -378,6 +388,7 @@ async fn put_status_returns_404_for_unknown_id() {
 #[tokio::test]
 async fn put_status_rejects_unknown_status() {
     let (router, store, _dir) = fixture().await;
+    let cookie = admin_cookie(&store).await;
     let r = store
         .upsert_issue("p", &Fingerprint::new("a"), "T", None, None, Utc::now())
         .await
@@ -388,12 +399,135 @@ async fn put_status_rejects_unknown_status() {
                 .method("PUT")
                 .uri(format!("/api/issues/{}/status", r.issue.id))
                 .header("content-type", "application/json")
+                .header("cookie", &cookie)
                 .body(Body::from(r#"{"status":"banana"}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+// ----- read-API auth gating -----
+//
+// Read endpoints (`/api/projects`, `/api/issues`, `/api/issues/:id/event`)
+// must require an authenticated session. Stack traces and breadcrumbs leak
+// secrets routinely (request bodies, env values), so unauthenticated
+// disclosure is a critical exposure.
+//
+// `PUT /api/issues/:id/status` is a triage mutation. We require admin so a
+// read-only viewer cannot silence alerts.
+
+#[tokio::test]
+async fn list_projects_rejects_missing_cookie() {
+    let (router, _store, _dir) = fixture().await;
+    let res = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/projects")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn list_projects_accepts_viewer_cookie() {
+    let (router, store, _dir) = fixture().await;
+    let cookie = signed_in_cookie(&store, store::Role::Viewer).await;
+    let res = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/projects")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn list_issues_rejects_missing_cookie() {
+    let (router, _store, _dir) = fixture().await;
+    let res = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/issues")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn latest_event_rejects_missing_cookie() {
+    let (router, store, _dir) = fixture().await;
+    let r = store
+        .upsert_issue("p", &Fingerprint::new("a"), "T", None, None, Utc::now())
+        .await
+        .unwrap();
+    let res = router
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/issues/{}/event", r.issue.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn put_status_rejects_missing_cookie() {
+    let (router, store, _dir) = fixture().await;
+    let r = store
+        .upsert_issue("p", &Fingerprint::new("a"), "T", None, None, Utc::now())
+        .await
+        .unwrap();
+    let res = router
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/issues/{}/status", r.issue.id))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"status":"resolved"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn put_status_rejects_viewer_role_with_403() {
+    // A viewer is read-only; mutating triage state must be admin-only so a
+    // compromised viewer session can't silence every alert.
+    let (router, store, _dir) = fixture().await;
+    let cookie = signed_in_cookie(&store, store::Role::Viewer).await;
+    let r = store
+        .upsert_issue("p", &Fingerprint::new("a"), "T", None, None, Utc::now())
+        .await
+        .unwrap();
+    let res = router
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/issues/{}/status", r.issue.id))
+                .header("content-type", "application/json")
+                .header("cookie", &cookie)
+                .body(Body::from(r#"{"status":"resolved"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
 
 // ----- DSN auth -----
@@ -1305,7 +1439,7 @@ async fn setup_returns_409_after_first_user_exists() {
 
 #[tokio::test]
 async fn setup_returns_503_when_no_setup_token_configured() {
-    // Without ERREXD_ADMIN_TOKEN there is no way to authorise the wizard.
+    // Without ERREX_ADMIN_TOKEN there is no way to authorise the wizard.
     // The endpoint must refuse, not silently allow open setup.
     let (router, _store, _dir) = fixture().await;
     let body = format!(r#"{{"token":"anything","username":"daisy","password":"{STRONG_PW}"}}"#);

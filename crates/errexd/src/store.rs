@@ -18,7 +18,7 @@ pub struct ProjectSummary {
 
 /// Admin-side project record: name + ingest token + optional webhook URL.
 /// Used by the CLI (`errexd project list/add/rotate/set-webhook`) and to
-/// validate `sentry_key` on ingest when `ERREXD_REQUIRE_AUTH=true`.
+/// validate `sentry_key` on ingest when `ERREX_REQUIRE_AUTH=true`.
 #[derive(Debug, Clone, Serialize)]
 pub struct Project {
     pub name: String,
@@ -125,7 +125,7 @@ pub struct Store {
 /// these every tick, so a UI change takes effect on the next purge run.
 ///
 /// `event_retention_days` of 0 means "fall back to the boot config flag"
-/// (`ERREXD_RETENTION_DAYS`). Storing the override separately lets an
+/// (`ERREX_RETENTION_DAYS`). Storing the override separately lets an
 /// operator tighten retention via the SPA without a redeploy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetentionSettings {

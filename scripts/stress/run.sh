@@ -39,11 +39,11 @@ start_daemon() {
   cleanup
   PID=""
   DATA="$(mktemp -d)"
-  ERREXD_DATA_DIR="$DATA" \
-  ERREXD_HTTP_PORT="$PORT" \
-  ERREXD_MCP_PORT="$MCP_PORT" \
-  ERREXD_LOG_LEVEL=warn \
-  ERREXD_RATE_LIMIT_PER_MIN="${ERREXD_RATE_LIMIT_PER_MIN:-0}" \
+  ERREX_DATA_DIR="$DATA" \
+  ERREX_PORT="$PORT" \
+  ERREX_MCP_PORT="$MCP_PORT" \
+  ERREX_LOG_LEVEL=warn \
+  ERREX_RATE_LIMIT_PER_MIN="${ERREX_RATE_LIMIT_PER_MIN:-0}" \
     "$BIN" >/dev/null 2>&1 &
   PID=$!
   for _ in $(seq 1 100); do

@@ -18,9 +18,9 @@ services:
       # pre-create the dir with `chown 1000:1000` and swap this line.
       - errex-data:/data
     environment:
-      ERREXD_DATA_DIR: /data
-      ERREXD_LOG_LEVEL: info
-      ERREXD_ADMIN_TOKEN: ${ERREXD_ADMIN_TOKEN:-123}
+      ERREX_DATA_DIR: /data
+      ERREX_LOG_LEVEL: info
+      ERREX_ADMIN_TOKEN: ${ERREX_ADMIN_TOKEN:-123}
 
 volumes:
   errex-data:

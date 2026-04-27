@@ -10,24 +10,24 @@ self-host.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `ERREXD_DATA_DIR` | `./data` | SQLite file location |
-| `ERREXD_HTTP_PORT` | `PORT` env, else `9090` | HTTP + SPA + WebSocket fan-out (single axum listener). Reads `PORT` automatically so Railway / Fly / Render / Heroku one-click deploys "just work". |
-| `ERREXD_MCP_PORT` | `9092` | MCP listener (stub) |
-| `ERREXD_LOG_LEVEL` | `info` | tracing filter |
-| `ERREXD_DEV_MODE` | `false` | Enable CORS for the Vite dev server |
-| `ERREXD_REQUIRE_AUTH` | `false` | Validate `sentry_key` on ingest |
-| `ERREXD_RETENTION_DAYS` | `30` | Purge events older than N days; `0` disables |
-| `ERREXD_RATE_LIMIT_PER_MIN` | `6000` | Per-project ingest cap; `0` = unlimited |
-| `ERREXD_RATE_LIMIT_BURST` | `200` | Token-bucket burst capacity |
-| `ERREXD_PUBLIC_URL` | `http://localhost:9090` | **Set this for any non-localhost deployment.** Embedded in DSNs, webhook payloads, and the dashboard's curl example. The daemon warns at boot if you bound to a public interface but left this at the default. |
-| `ERREXD_ADMIN_TOKEN` | _(unset)_ | Setup-wizard token; required to bootstrap the first admin user |
+| `ERREX_DATA_DIR` | `./data` | SQLite file location |
+| `ERREX_PORT` | `PORT` env, else `9090` | HTTP + SPA + WebSocket fan-out (single axum listener). Reads `PORT` automatically so Railway / Fly / Render / Heroku one-click deploys "just work". |
+| `ERREX_MCP_PORT` | `9092` | MCP listener (stub) |
+| `ERREX_LOG_LEVEL` | `info` | tracing filter |
+| `ERREX_DEV_MODE` | `false` | Enable CORS for the Vite dev server |
+| `ERREX_REQUIRE_AUTH` | `false` | Validate `sentry_key` on ingest |
+| `ERREX_RETENTION_DAYS` | `30` | Purge events older than N days; `0` disables |
+| `ERREX_RATE_LIMIT_PER_MIN` | `6000` | Per-project ingest cap; `0` = unlimited |
+| `ERREX_RATE_LIMIT_BURST` | `200` | Token-bucket burst capacity |
+| `ERREX_PUBLIC_URL` | `http://localhost:9090` | **Set this for any non-localhost deployment.** Embedded in DSNs, webhook payloads, and the dashboard's curl example. The daemon warns at boot if you bound to a public interface but left this at the default. |
+| `ERREX_ADMIN_TOKEN` | _(unset)_ | Setup-wizard token; required to bootstrap the first admin user |
 
 ## Custom domain — one env var
 
 To put errex behind `https://errex.example.com`, set exactly one variable:
 
 ```bash
-ERREXD_PUBLIC_URL=https://errex.example.com
+ERREX_PUBLIC_URL=https://errex.example.com
 ```
 
 That's it. The DSN handed to SDKs becomes
@@ -42,10 +42,10 @@ Per-platform recipes:
 
 1. Add a custom domain in the platform UI.
 2. Set the service env vars:
-   - `ERREXD_PUBLIC_URL=https://errex.example.com`
-   - `ERREXD_ADMIN_TOKEN=$(openssl rand -hex 16)` (first run only)
+   - `ERREX_PUBLIC_URL=https://errex.example.com`
+   - `ERREX_ADMIN_TOKEN=$(openssl rand -hex 16)` (first run only)
 3. Deploy. The platform sets `PORT`; errexd reads it automatically.
-   No `ERREXD_HTTP_PORT` override needed.
+   No `ERREX_PORT` override needed.
 
 ### Caddy
 
@@ -56,7 +56,7 @@ errex.example.com {
 ```
 
 ```bash
-ERREXD_PUBLIC_URL=https://errex.example.com docker compose -f docker/docker-compose.yml up -d
+ERREX_PUBLIC_URL=https://errex.example.com docker compose -f docker/docker-compose.yml up -d
 ```
 
 Caddy handles TLS automatically.
@@ -101,17 +101,17 @@ HTTP correctly will handle `/ws/<project>` upgrades without extra config
 
 The setup wizard at `/setup` requires a one-shot **setup token** so an
 attacker can't claim the admin slot before you do. Set
-`ERREXD_ADMIN_TOKEN` to a value you control before starting the daemon
+`ERREX_ADMIN_TOKEN` to a value you control before starting the daemon
 the first time:
 
 ```yaml
 # docker/docker-compose.yml
 environment:
-  ERREXD_ADMIN_TOKEN: ${ERREXD_ADMIN_TOKEN:-changeme}
+  ERREX_ADMIN_TOKEN: ${ERREX_ADMIN_TOKEN:-changeme}
 ```
 
 ```bash
-ERREXD_ADMIN_TOKEN=$(openssl rand -hex 16) docker compose -f docker/docker-compose.yml up -d
+ERREX_ADMIN_TOKEN=$(openssl rand -hex 16) docker compose -f docker/docker-compose.yml up -d
 ```
 
 Open <http://localhost:9090/setup>, paste the token, choose a username
@@ -138,28 +138,34 @@ Inside Docker:
 docker compose -f docker/docker-compose.yml exec errexd errexd project list
 ```
 
-`project add` prints the DSN you give to your SDK:
+`project add` prints both the SDK-facing DSN and a curl-friendly URL:
 
 ```
-project: my-app
-token:   3f4a9b8e2c1d4f5e8a7b6c5d4e3f2a1b
-dsn:     https://errex.example.com/api/my-app/envelope/?sentry_key=3f4a9b8e2c1d4f5e8a7b6c5d4e3f2a1b
+project:    my-app
+token:      3f4a9b8e2c1d4f5e8a7b6c5d4e3f2a1b
+dsn:        https://3f4a9b8e2c1d4f5e8a7b6c5d4e3f2a1b@errex.example.com/my-app
+ingest_url: https://errex.example.com/api/my-app/envelope/?sentry_key=3f4a...
 ```
 
-To require this token on ingest, set `ERREXD_REQUIRE_AUTH=true`. Off by
+The `dsn` is the canonical Sentry shape — every official SDK parses it.
+The `ingest_url` is for hand-testing with curl; the SDK derives it
+internally from the DSN.
+
+To require this token on ingest, set `ERREX_REQUIRE_AUTH=true`. Off by
 default — fine when the daemon is on a private network.
 
 ## Wiring up an SDK
 
 errex speaks the [Sentry envelope](https://develop.sentry.dev/sdk/envelopes/)
-wire format. Any official `@sentry/*` SDK works unchanged.
+wire format. Any official `@sentry/*` SDK works unchanged — just paste
+the DSN.
 
 JavaScript / TypeScript:
 
 ```js
 import * as Sentry from '@sentry/browser';
 Sentry.init({
-  dsn: 'https://errex.example.com/api/my-app/envelope/?sentry_key=3f4a...'
+  dsn: 'https://3f4a...@errex.example.com/my-app'
 });
 ```
 
@@ -167,17 +173,13 @@ Python:
 
 ```python
 import sentry_sdk
-sentry_sdk.init(dsn="https://errex.example.com/api/my-app/envelope/?sentry_key=3f4a...")
-```
-
-The SDK's normal DSN parsing also works:
-
-```python
 sentry_sdk.init(dsn="https://3f4a...@errex.example.com/my-app")
 ```
 
-errex accepts the token via either `?sentry_key=` or the standard
-`X-Sentry-Auth` header.
+The SDK constructs the actual ingest URL (`/api/my-app/envelope/`) from
+the DSN and authenticates with the standard `X-Sentry-Auth` header. errex
+also accepts the token via `?sentry_key=` query param for curl-style
+testing.
 
 ## Webhook alerts
 

@@ -53,7 +53,7 @@ open http://localhost:5173
 ```
 
 Vite proxies `/api` and `/ws` to `:9090` automatically. Daemon is in
-`ERREXD_DEV_MODE=true` (set by compose) so CORS lets the dev server in.
+`ERREX_DEV_MODE=true` (set by compose) so CORS lets the dev server in.
 
 For Rust changes, `./errex.sh check` runs the full bar in a `rust:1-slim`
 container so you don't need a local toolchain.

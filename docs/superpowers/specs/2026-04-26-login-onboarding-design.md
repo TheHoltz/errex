@@ -15,7 +15,7 @@ The redesign also factors out the shared auth-page scaffolding so new auth surfa
 - `/login` happy path
 - `/login` HTTP 401 inline error ("wrong username or password")
 - `/login` HTTP 429 lockout with monospace tabular countdown
-- `/setup` `setup_disabled` empty-state (no `ERREXD_ADMIN_TOKEN` configured)
+- `/setup` `setup_disabled` empty-state (no `ERREX_ADMIN_TOKEN` configured)
 - `/setup` step 1 — verify host access (paste setup token)
 - `/setup` step 2 — create admin (username + password + confirm)
 - New shared `AuthShell` component (backdrop + glass Card + brand mark)
@@ -109,18 +109,18 @@ Same `AuthShell` + glass Card. Mark and title (`welcome to errex` / `set up your
 - Border: 1px `hsla(38, 92%, 56%, 0.35)`
 - Background: `hsla(38, 92%, 56%, 0.07)`
 - Icon: lucide `AlertTriangle`
-- Copy: `setup is disabled — daemon was started without ` then `ERREXD_ADMIN_TOKEN` in an inline `<code>` tile, then `. set the env var and restart.`
+- Copy: `setup is disabled — daemon was started without ` then `ERREX_ADMIN_TOKEN` in an inline `<code>` tile, then `. set the env var and restart.`
 
 ### `/setup` step 1 — verify host access
 
 Same shell. Mark, title `welcome to errex`, sub `set up your first operator account`. Then:
 
 1. `Stepper`: pill 1 active (filled primary), label `verify host access`, separator line, pill 2 outline.
-2. Explanation: `paste ` + `<code>ERREXD_ADMIN_TOKEN</code>` + ` from the daemon environment. proves you have host access.`
+2. Explanation: `paste ` + `<code>ERREX_ADMIN_TOKEN</code>` + ` from the daemon environment. proves you have host access.`
 3. `Label` + mono `Input type="password"` for the token (mono so the operator can spot typos at a glance).
 4. Button `continue →`. Disabled until the token field is non-empty.
 
-On submit, advances to step 2 in-place (no route change). On the dispatched submit returning 401 (server rejects token), bounce back to step 1 with an alert above the input: `invalid setup token — paste the value of ERREXD_ADMIN_TOKEN`.
+On submit, advances to step 2 in-place (no route change). On the dispatched submit returning 401 (server rejects token), bounce back to step 1 with an alert above the input: `invalid setup token — paste the value of ERREX_ADMIN_TOKEN`.
 
 ### `/setup` step 2 — create admin
 
@@ -234,4 +234,4 @@ All UI strings stay lowercase, terse — matches today's voice:
 - `create your account` / `you'll use this to sign in from now on`
 - `wrong username or password` (existing 401 string, unchanged)
 - `locked out — too many attempts. try again in 04:32.` (existing lockout copy, slightly tightened)
-- `setup is disabled — daemon was started without ERREXD_ADMIN_TOKEN. set the env var and restart.` (existing setup-disabled copy, slightly tightened)
+- `setup is disabled — daemon was started without ERREX_ADMIN_TOKEN. set the env var and restart.` (existing setup-disabled copy, slightly tightened)

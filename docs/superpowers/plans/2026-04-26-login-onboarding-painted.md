@@ -587,7 +587,7 @@ Open two terminals:
 
 ```bash
 # Terminal 1: start the daemon (if not already running)
-ERREXD_DEV_MODE=true ERREXD_ADMIN_TOKEN=devtoken cargo run -p errexd
+ERREX_DEV_MODE=true ERREX_ADMIN_TOKEN=devtoken cargo run -p errexd
 
 # Terminal 2: start the SPA
 cd web && bun run dev
@@ -703,7 +703,7 @@ Replace `web/src/routes/setup/+page.svelte` with:
           // Wrong token: kick the operator back to step 1 so they can paste
           // the right one without losing the username they typed.
           step = 'token';
-          error = 'invalid setup token — paste the value of ERREXD_ADMIN_TOKEN';
+          error = 'invalid setup token — paste the value of ERREX_ADMIN_TOKEN';
         } else {
           error = err.message;
         }
@@ -745,7 +745,7 @@ Replace `web/src/routes/setup/+page.svelte` with:
       <div>
         setup is disabled — daemon was started without
         <code class="rounded px-1.5 py-0.5 font-mono text-[10.5px]" style="background:hsla(0,0%,0%,0.4);">
-          ERREXD_ADMIN_TOKEN
+          ERREX_ADMIN_TOKEN
         </code>
         . set the env var and restart.
       </div>
@@ -760,7 +760,7 @@ Replace `web/src/routes/setup/+page.svelte` with:
     <p class="text-muted-foreground text-[11.5px]">
       paste
       <code class="rounded px-1.5 py-0.5 font-mono text-[10.5px]" style="background:hsla(0,0%,0%,0.4);">
-        ERREXD_ADMIN_TOKEN
+        ERREX_ADMIN_TOKEN
       </code>
       from the daemon environment. proves you have host access.
     </p>
@@ -880,7 +880,7 @@ With the daemon and SPA both running (per Task 5 step 6), wipe the existing user
 ```bash
 # Stop the daemon, wipe its data dir, restart
 rm -rf data/errex.db data/errex.db-wal data/errex.db-shm
-ERREXD_DEV_MODE=true ERREXD_ADMIN_TOKEN=devtoken cargo run -p errexd
+ERREX_DEV_MODE=true ERREX_ADMIN_TOKEN=devtoken cargo run -p errexd
 ```
 
 Visit `http://localhost:5173/setup` and verify:
@@ -888,10 +888,10 @@ Visit `http://localhost:5173/setup` and verify:
 - **Loading flicker** — the "checking daemon…" spinner appears briefly on first load.
 - **Step 1** — Stepper shows pill 1 active with label `verify host access`, pill 2 outlined. Pasting the token and clicking `continue` advances to step 2 in-place.
 - **Step 2** — Stepper now shows pill 1 with a checkmark and label `verified`, pill 2 active with label `create account`. Username + password + confirm all render with `h-10` height. The submit button enables only when both fields are non-empty and password ≥ 12 chars.
-- **Wrong token round-trip** — Type a wrong token at step 1, advance to step 2, fill in a username/password, submit. Server returns 401, the page bounces back to step 1 with the destructive alert above the form: `invalid setup token — paste the value of ERREXD_ADMIN_TOKEN`. Username field is preserved (intentional — see comment in `completeSetup`).
-- **Setup-disabled** — Restart the daemon WITHOUT `ERREXD_ADMIN_TOKEN` set:
+- **Wrong token round-trip** — Type a wrong token at step 1, advance to step 2, fill in a username/password, submit. Server returns 401, the page bounces back to step 1 with the destructive alert above the form: `invalid setup token — paste the value of ERREX_ADMIN_TOKEN`. Username field is preserved (intentional — see comment in `completeSetup`).
+- **Setup-disabled** — Restart the daemon WITHOUT `ERREX_ADMIN_TOKEN` set:
   ```bash
-  ERREXD_DEV_MODE=true cargo run -p errexd
+  ERREX_DEV_MODE=true cargo run -p errexd
   ```
   Visit `/setup`. The amber-tinted alert renders inside the Card explaining the missing env var. No form, no Stepper.
 - **Already-set-up redirect** — Complete setup once, then visit `/setup` again. The page should briefly show the "setup already complete — sending you to /login…" message, then redirect.
@@ -924,7 +924,7 @@ Expected: both green. The Rust check is unchanged behavior — included only bec
 
 Verify the full auth flow end-to-end one last time:
 
-1. Wipe data, start daemon with `ERREXD_ADMIN_TOKEN=devtoken`.
+1. Wipe data, start daemon with `ERREX_ADMIN_TOKEN=devtoken`.
 2. `/setup` step 1 → enter `devtoken` → step 2 → create admin → land on `/`.
 3. Sign out from the app header.
 4. `/login` → sign in with the admin you just created → land on `/`.
