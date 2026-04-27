@@ -1,6 +1,7 @@
 import type {
   ConnectionStatus,
   Issue,
+  IssueLevel,
   IssueStatus,
   NormalizedEvent,
   ProjectSummary
@@ -41,12 +42,24 @@ class FilterStore {
   // Default view shows what's actionable; resolved/muted/ignored are hidden
   // until the user opts in. Power users can toggle via the list header.
   statuses = $state<Set<IssueStatus>>(new Set(['unresolved']));
+  // Empty set = no level filter (all levels visible). Non-empty = include
+  // only those levels. Distinct from statuses where the default is a
+  // single-element set, since "no level filter" is the much more common
+  // resting state.
+  levels = $state<Set<IssueLevel>>(new Set());
 
   toggleStatus(s: IssueStatus) {
     const next = new Set(this.statuses);
     if (next.has(s)) next.delete(s);
     else next.add(s);
     this.statuses = next;
+  }
+
+  toggleLevel(l: IssueLevel) {
+    const next = new Set(this.levels);
+    if (next.has(l)) next.delete(l);
+    else next.add(l);
+    this.levels = next;
   }
 }
 
@@ -91,9 +104,17 @@ export const load = new LoadStore();
 // wrong for any team larger than one.
 export function visibleIssues(): Issue[] {
   const q = filter.query.trim().toLowerCase();
+  const levelFilter = filter.levels;
   return issues.list.filter((i) => {
     if (i.project !== projects.current) return false;
     if (!filter.statuses.has(i.status)) return false;
+    if (levelFilter.size > 0) {
+      const lvl = i.level?.toLowerCase() ?? '';
+      // Issues whose level is null can't satisfy a positive level filter;
+      // dropping them is correct — "show me only fatals" should not
+      // accidentally include unlabelled rows.
+      if (!(lvl && levelFilter.has(lvl as IssueLevel))) return false;
+    }
     if (q && !matches(i, q)) return false;
     return true;
   });
