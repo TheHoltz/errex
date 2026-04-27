@@ -10,7 +10,7 @@ import {
   selection,
   visibleIssues
 } from './stores.svelte';
-import type { Issue, IssueStatus } from './types';
+import type { Issue, IssueLevel, IssueStatus } from './types';
 
 function issue(over: Partial<Issue>): Issue {
   return {
@@ -32,6 +32,7 @@ beforeEach(() => {
   issues.reset([]);
   filter.query = '';
   filter.statuses = new Set<IssueStatus>(['unresolved']);
+  filter.levels = new Set<IssueLevel>();
   projects.current = 'p';
   selection.issueId = null;
   selection.event = null;
@@ -113,5 +114,46 @@ describe('FilterStore.toggleStatus', () => {
     expect(filter.statuses.has('resolved')).toBe(true);
     filter.toggleStatus('resolved');
     expect(filter.statuses.has('resolved')).toBe(false);
+  });
+});
+
+describe('FilterStore.toggleLevel', () => {
+  it('adds and removes levels idempotently', () => {
+    filter.levels = new Set();
+    filter.toggleLevel('error');
+    expect(filter.levels.has('error')).toBe(true);
+    filter.toggleLevel('error');
+    expect(filter.levels.has('error')).toBe(false);
+  });
+});
+
+describe('visibleIssues + level filter', () => {
+  it('keeps all levels when the level filter is empty', () => {
+    issues.reset([
+      issue({ id: 1, level: 'error', status: 'unresolved' }),
+      issue({ id: 2, level: 'warning', status: 'unresolved' }),
+      issue({ id: 3, level: null, status: 'unresolved' })
+    ]);
+    filter.levels = new Set();
+    expect(visibleIssues().map((i) => i.id).sort()).toEqual([1, 2, 3]);
+  });
+
+  it('narrows to selected levels (case-insensitive against issue.level)', () => {
+    issues.reset([
+      issue({ id: 1, level: 'error', status: 'unresolved' }),
+      issue({ id: 2, level: 'WARNING', status: 'unresolved' }),
+      issue({ id: 3, level: 'fatal', status: 'unresolved' })
+    ]);
+    filter.levels = new Set<IssueLevel>(['error', 'fatal']);
+    expect(visibleIssues().map((i) => i.id).sort()).toEqual([1, 3]);
+  });
+
+  it('drops issues whose level is null when a level filter is active', () => {
+    issues.reset([
+      issue({ id: 1, level: null, status: 'unresolved' }),
+      issue({ id: 2, level: 'error', status: 'unresolved' })
+    ]);
+    filter.levels = new Set<IssueLevel>(['error']);
+    expect(visibleIssues().map((i) => i.id)).toEqual([2]);
   });
 });
