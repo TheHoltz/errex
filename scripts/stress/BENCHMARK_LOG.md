@@ -92,6 +92,44 @@ explicitly in the log entry before implementing.
   not a WAL checkpoint stall. Tail-latency optimization (hypothesis 3
   in the bank) is now low priority unless it resurfaces.
 
+### Iteration 8 — `BATCH_SIZE` 32 → 16
+
+- **hypothesis (bank #9):** smaller batches cycle the BEGIN/COMMIT
+  more often, but each batch holds fewer events in memory between
+  arrival and persistence — possibly trading throughput for steady
+  RSS. Worth measuring at 16 and 64 (iter 7 already showed 64 is
+  worse: median 373 vs 414).
+- **changed:** `crates/errexd/src/digest.rs::BATCH_SIZE` 32 → 16.
+- **bench (3 runs):**
+  - run 1: efficiency 389.96 (rps 7395, rss_mean 18.96)
+  - run 2: efficiency 421.72 (rps 7399, rss_mean 17.54)
+  - run 3: efficiency 442.83 (rps 7406, rss_mean 16.72)
+  - median: efficiency 421.72
+- **delta vs running best (iter-5+6 median 413.81):** efficiency +1.9%
+  (413.81 → 421.72). Marginal — improvement is below the +2%
+  termination threshold but above the +0.5% keep-it floor.
+- **decision:** KEPT. Running best is now 421.72.
+  Termination counter: 1/3 consecutive sub-2% improvements.
+- **notes:** Smaller batches reduce mean RSS slightly (less in-flight
+  buffer). Throughput unchanged. The pattern is monotonic so far:
+  64 was worse, 32 was the prior baseline, 16 is marginally better.
+  Iteration 7 (BATCH_SIZE=64) was reverted: median 373 vs 414, RSS
+  inflated.
+
+### Iteration 7 — `BATCH_SIZE` 32 → 64 (REVERTED)
+
+- **hypothesis (bank #9):** doubling the batch amortizes BEGIN/COMMIT
+  over more events; sustained throughput should rise.
+- **changed:** `crates/errexd/src/digest.rs::BATCH_SIZE` 32 → 64.
+- **bench (3 runs):** efficiency 349.83 / 373.39 / 396.23 — median
+  373.39.
+- **delta vs running best (413.81):** -9.8%.
+- **decision:** REVERTED via `git restore .`.
+- **notes:** Bigger batch increased rss_mean (~17.9 → 19.8 MB) without
+  moving throughput. With `synchronous=OFF` the COMMIT cost was already
+  near-zero so amortization had nothing left to give; the larger Vec
+  allocation simply costs more.
+
 ### Iteration 6 — methodology fix: efficiency uses `rss_mean_mb`
 
 - **hypothesis:** the per-run variance in `rss_max_mb` was masking

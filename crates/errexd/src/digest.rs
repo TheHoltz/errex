@@ -23,7 +23,7 @@ use crate::webhook;
 ///
 /// Stress-tested at 32 — increasing it bumps the saturation throughput
 /// but enlarges the worst-case tail when a checkpoint stalls a big tx.
-const BATCH_SIZE: usize = 32;
+const BATCH_SIZE: usize = 16;
 
 /// What the ingest layer hands to the digest task.
 ///
