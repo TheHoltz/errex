@@ -151,8 +151,9 @@ async fn main() -> anyhow::Result<()> {
         public_url: cfg.public_url.clone(),
         dev_mode: cfg.dev_mode,
     });
+    // The WS fan-out is mounted on the HTTP listener via axum (see
+    // crate::ws), so there's no separate task to spawn here.
     let http_handle = tokio::spawn(ingest::serve(cfg.http_addr(), http_state));
-    let ws_handle = tokio::spawn(ws::serve(cfg.ws_addr(), store.clone(), fanout_tx.clone()));
     let mcp_handle = tokio::spawn(mcp::serve(cfg.mcp_addr()));
     let retention_handle = {
         let store = store.clone();
@@ -161,16 +162,14 @@ async fn main() -> anyhow::Result<()> {
     };
 
     tracing::info!(
-        "errexd listening on :{} (http), :{} (ws), :{} (mcp)",
+        "errexd listening on :{} (http+ws), :{} (mcp)",
         cfg.http_port,
-        cfg.ws_port,
         cfg.mcp_port,
     );
 
     // Block on either Ctrl-C or any subsystem error.
     tokio::select! {
         res = http_handle => res.context("http task panicked")?.context("http server")?,
-        res = ws_handle => res.context("ws task panicked")?.context("ws server")?,
         res = mcp_handle => res.context("mcp task panicked")?.context("mcp server")?,
         res = digest_handle => res.context("digest task panicked")?.context("digest")?,
         res = retention_handle => res.context("retention task panicked")?,

@@ -87,7 +87,7 @@ cmd_shell() {
 # running daemon. host.docker.internal works on Docker Desktop (macOS/Win);
 # override ERREX_DAEMON_URL on Linux if needed.
 cmd_tui() {
-  local daemon_url="${ERREX_DAEMON_URL:-ws://host.docker.internal:9091}"
+  local daemon_url="${ERREX_DAEMON_URL:-ws://host.docker.internal:9090}"
   docker run --rm -it \
     -v "$ROOT:/work" \
     -v errex-cargo-registry:/usr/local/cargo/registry \

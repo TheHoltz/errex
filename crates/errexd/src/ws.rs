@@ -1,64 +1,62 @@
-//! WebSocket fan-out server for connected clients.
+//! WebSocket fan-out for connected SPA clients — mounted on the same axum
+//! listener as the HTTP API.
 //!
-//! On port 9091, separate from the HTTP ingest server. tokio-tungstenite
-//! directly is the smaller dep footprint vs axum's WS extractors.
+//! Earlier versions ran a separate tokio-tungstenite server on :9091. In
+//! production that broke the SPA: the browser builds the WS URL from
+//! `location.host`, which equals the HTTP port the SPA was served from.
+//! The upgrade request hit the HTTP listener, missed every API route, fell
+//! through to the SPA fallback, and got `200 + index.html` instead of
+//! `101 Switching Protocols`. Unifying onto one listener removes the
+//! whole class of "wrong port" bugs and shaves a TCP listener off the
+//! self-host footprint.
 //!
 //! Snapshot on connect comes from a SQLite query — there is no in-memory
 //! issue cache. WAL reads are sub-millisecond and skipping the cache saves
 //! `N × Issue` bytes for free. The cost is one query per connecting client,
 //! which is exactly when latency doesn't matter.
 
-use std::net::SocketAddr;
+use std::sync::Arc;
 
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Path, State};
+use axum::response::Response;
 use errex_proto::{ClientMessage, ServerMessage};
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
-use tokio_tungstenite::tungstenite::Message;
 
 use crate::error::DaemonError;
+use crate::ingest::AppState;
 use crate::store::Store;
 
-pub async fn serve(
-    addr: SocketAddr,
-    store: Store,
-    fanout: broadcast::Sender<ServerMessage>,
-) -> Result<(), DaemonError> {
-    let listener = TcpListener::bind(addr).await?;
-    tracing::info!("ws fan-out bound to {addr}");
-
-    loop {
-        let (stream, peer) = match listener.accept().await {
-            Ok(p) => p,
-            Err(err) => {
-                tracing::warn!(%err, "ws accept failed");
-                continue;
-            }
-        };
-        let rx = fanout.subscribe();
-        let store = store.clone();
-        tokio::spawn(async move {
-            if let Err(err) = handle_connection(stream, store, rx).await {
-                tracing::debug!(%peer, %err, "ws connection closed");
-            }
-        });
-    }
+/// HTTP→WS upgrade handler mounted at `/ws/:project`. The project segment
+/// is reserved for future per-project filtering — today the snapshot is
+/// global and the SPA filters client-side, matching the previous server's
+/// behavior. Keeping the segment in the URL means SDKs and operators can
+/// already include it without a wire break later.
+pub async fn handle(
+    upgrade: WebSocketUpgrade,
+    Path(_project): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    let store = state.store.clone();
+    let rx = state.fanout.subscribe();
+    upgrade.on_upgrade(move |socket| async move {
+        if let Err(err) = run(socket, store, rx).await {
+            tracing::debug!(%err, "ws connection closed");
+        }
+    })
 }
 
-async fn handle_connection(
-    stream: TcpStream,
+async fn run(
+    socket: WebSocket,
     store: Store,
     mut fanout: broadcast::Receiver<ServerMessage>,
 ) -> Result<(), DaemonError> {
-    let ws = tokio_tungstenite::accept_async(stream)
-        .await
-        .map_err(|e| DaemonError::Io(std::io::Error::other(e)))?;
-    let (mut write, mut read) = ws.split();
+    let (mut write, mut read) = socket.split();
 
-    // Greet, then catch the client up. Subscribing to `fanout` happened
-    // before this snapshot was loaded, so any concurrent updates arrive
-    // after it — possibly re-stating an issue already in the snapshot,
-    // which the client handles idempotently by id.
+    // Subscribing happened before this snapshot loaded, so any concurrent
+    // updates arrive after — possibly re-stating an issue already in the
+    // snapshot, which the client handles idempotently by id.
     let issues = store.load_issues().await?;
     let hello = ServerMessage::Hello {
         server_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -88,7 +86,7 @@ async fn handle_connection(
                 Err(broadcast::error::RecvError::Closed) => break,
             },
 
-            // Client-side traffic. We only honor pings today; richer commands
+            // Client-side traffic. Only honors pings today; richer commands
             // (resolve, mute) land here as the daemon grows.
             incoming = read.next() => match incoming {
                 Some(Ok(Message::Text(t))) => {

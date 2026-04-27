@@ -6,6 +6,10 @@ import { defineConfig } from 'vite';
 // behaves the same as it does in prod (where it's served from the daemon
 // itself). The daemon must be started with ERREXD_DEV_MODE=true so its CORS
 // policy permits direct fetches that bypass this proxy.
+//
+// Both /api and /ws live on the same daemon listener (axum handles the
+// upgrade), so the WS proxy doesn't rewrite the path — `/ws/<project>`
+// reaches the daemon as-is.
 export default defineConfig({
   plugins: [tailwindcss(), sveltekit()],
   server: {
@@ -14,10 +18,9 @@ export default defineConfig({
     proxy: {
       '/api': { target: 'http://localhost:9090', changeOrigin: true },
       '/ws': {
-        target: 'ws://localhost:9091',
+        target: 'ws://localhost:9090',
         ws: true,
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/ws/, '')
+        changeOrigin: true
       }
     }
   }

@@ -7,8 +7,8 @@ services:
     container_name: errexd
     restart: unless-stopped
     ports:
+      # 9090 = HTTP + WS (axum upgrade); 9092 = MCP stub.
       - "9090:9090"
-      - "9091:9091"
       - "9092:9092"
     volumes:
       # Named volume so /data inherits the image's UID 1000 ownership.

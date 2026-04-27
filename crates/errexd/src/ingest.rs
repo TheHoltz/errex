@@ -1,8 +1,9 @@
 //! HTTP ingest + browser-facing API server.
 //!
-//! Serves three categories of routes off port 9090:
+//! Serves four categories of routes off port 9090:
 //!   - `/health`, `/api/:project/envelope/`     — operations + Sentry SDK ingest
 //!   - `/api/projects`, `/api/issues`           — JSON for the SPA
+//!   - `/ws/:project`                           — fan-out WebSocket (axum upgrade)
 //!   - everything else                          — embedded SvelteKit SPA
 //!
 //! Routing is intentionally flat so it's easy to add `/api/<project>/store/`
@@ -122,6 +123,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/admin/users/:u/sessions/revoke-all",
             post(admin_revoke_user_sessions),
         )
+        // ----- websocket fan-out -----
+        // Must be a real route (not the SPA fallback) so the upgrade
+        // handshake gets `101 Switching Protocols` instead of `200 +
+        // index.html`. See crate::ws for the full background.
+        .route("/ws/:project", get(crate::ws::handle))
         .with_state(state)
         .fallback(spa::handler)
 }
