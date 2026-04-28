@@ -78,21 +78,6 @@ docker compose -f docker/docker-compose.yml up -d
 
 The full env / CLI reference is in [docs/CONFIGURATION.md](./docs/CONFIGURATION.md).
 
-## Custom domain (one env var)
-
-Set `ERREX_PUBLIC_URL` to the externally-reachable URL. Everything that needs to know the public host — DSN, webhook payload links, dashboard test-event curl example — picks it up from this single value.
-
-```bash
-ERREX_PUBLIC_URL=https://errex.example.com
-```
-
-| platform           | what to do                                                                                                                                  |
-|--------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
-| **Railway / Fly / Render / Heroku** | Add a custom domain in the platform UI, set `ERREX_PUBLIC_URL` to that URL, deploy. Port is auto-detected from the platform's `PORT` env. |
-| **Caddy reverse proxy** | `errex.example.com { reverse_proxy localhost:9090 }`, set `ERREX_PUBLIC_URL=https://errex.example.com`. Caddy handles TLS.            |
-| **Nginx / Traefik** | Standard upstream to `localhost:9090`, set `ERREX_PUBLIC_URL` to the public HTTPS URL. Forward `Host` and `Upgrade` headers for the WebSocket. |
-
-errexd serves plain HTTP on its bind port; TLS termination is the proxy/edge's job (every modern PaaS does this for free). The daemon prints a startup warning if `ERREX_PUBLIC_URL` is left at its `localhost:9090` default while bound to a public interface — DSNs would point at localhost otherwise, and remote SDKs would silently miss the daemon.
 
 ## How it works
 
