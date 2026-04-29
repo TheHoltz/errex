@@ -58,10 +58,19 @@ pub async fn handler(uri: Uri) -> Response {
 }
 
 fn file_response(path: &str, body: &[u8]) -> Response {
-    let mime = mime_guess::from_path(path)
-        .first_or_octet_stream()
-        .essence_str()
-        .to_string();
+    // Hand-rolled lookup: the SPA build emits seven file types; a full
+    // mime database (mime_guess) carries hundreds of mappings as static
+    // tables that just sit in the binary's resident pages.
+    let mime = match path.rsplit_once('.').map(|(_, ext)| ext) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "application/javascript",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("woff2") => "font/woff2",
+        Some("txt") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    };
 
     Response::builder()
         .status(StatusCode::OK)
