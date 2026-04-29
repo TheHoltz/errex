@@ -219,9 +219,20 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn init_tracing(level: &str) {
-    use tracing_subscriber::{fmt, EnvFilter};
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
-    fmt().with_env_filter(filter).with_target(false).init();
+    // LevelFilter instead of EnvFilter: the directive parser pulls in
+    // regex-automata + regex-syntax (~1 MB rodata) for a feature
+    // self-hosters don't need — they set ERREX_LOG_LEVEL and that's it.
+    let lvl = match level.to_ascii_lowercase().as_str() {
+        "trace" => tracing::Level::TRACE,
+        "debug" => tracing::Level::DEBUG,
+        "warn" => tracing::Level::WARN,
+        "error" => tracing::Level::ERROR,
+        _ => tracing::Level::INFO,
+    };
+    tracing_subscriber::fmt()
+        .with_max_level(lvl)
+        .with_target(false)
+        .init();
 }
 
 /// Tiny HTTP/1.1 GET implemented with bare TCP — avoids pulling in a client
