@@ -240,14 +240,15 @@ impl Store {
             .pragma("temp_store", "MEMORY")
             .foreign_keys(true);
 
-        // 2 connections: 1 writer (digest task) + 1 shared reader for
-        // /api routes and WS snapshot loads. Self-host workload rarely
-        // has more than one concurrent read in flight; sqlx queues the
-        // rest with sub-millisecond wait. Each connection costs a
-        // prepared-statement cache + page buffer (~0.5 MB), so trimming
-        // to 2 saves ~1 MB at idle.
+        // 1 connection: under WAL, sqlx serializes all queries through the
+        // pool, but the daemon's hot path is already single-writer (the
+        // digest task) and the read side is `/api` + WS snapshots issued at
+        // self-host volume — sub-ms each. A second connection's
+        // prepared-statement cache + page buffer (~0.5 MB) was paying for
+        // contention that doesn't exist at this scale. If readers ever
+        // start showing up in /metrics queue depth, bump this back.
         let pool = SqlitePoolOptions::new()
-            .max_connections(2)
+            .max_connections(1)
             .connect_with(opts)
             .await?;
 
