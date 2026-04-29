@@ -113,6 +113,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/admin/retention",
             get(admin_get_retention).put(admin_put_retention),
         )
+        .route("/api/admin/storage", get(admin_get_storage))
         .route(
             "/api/admin/projects",
             get(admin_list_projects).post(admin_create_project),
@@ -485,6 +486,17 @@ impl AdminProjectView {
 #[allow(clippy::result_large_err)]
 async fn check_admin(state: &AppState, headers: &axum::http::HeaderMap) -> Result<(), Response> {
     crate::auth::require_admin(state, headers).await.map(|_| ())
+}
+
+async fn admin_get_storage(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    if let Err(resp) = check_admin(&state, &headers).await {
+        return Ok(resp);
+    }
+    let s = state.store.storage_stats().await?;
+    Ok(Json(s).into_response())
 }
 
 async fn admin_get_retention(

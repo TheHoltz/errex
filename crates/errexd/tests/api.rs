@@ -1003,6 +1003,36 @@ async fn admin_get_retention_requires_admin() {
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
 
+// ----- /api/admin/storage -----
+//
+// Powers the Retention settings header. Auth-gated like every other admin
+// endpoint. The shape MUST stay stable across releases — the SPA renders
+// each field literally and a silent rename would blank the hero.
+
+#[tokio::test]
+async fn admin_get_storage_returns_zero_counts_on_fresh_db() {
+    let (router, store, _dir) = fixture_with_admin(ADMIN_TOKEN).await;
+    let cookie = admin_cookie(&store).await;
+    let res = admin_get(&router, "/api/admin/storage", Some(&cookie)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    assert!(
+        v["bytes"].as_i64().unwrap_or(0) > 0,
+        "fresh DB should report non-zero bytes (schema + migrations)"
+    );
+    assert_eq!(v["issues"].as_i64(), Some(0));
+    assert_eq!(v["events"].as_i64(), Some(0));
+    assert!(v["oldest_event_age_days"].is_null());
+}
+
+#[tokio::test]
+async fn admin_get_storage_requires_admin() {
+    let (router, store, _dir) = fixture_with_admin(ADMIN_TOKEN).await;
+    let viewer_cookie = signed_in_cookie(&store, store::Role::Viewer).await;
+    let res = admin_get(&router, "/api/admin/storage", Some(&viewer_cookie)).await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
 #[tokio::test]
 async fn admin_set_webhook_persists_url() {
     let (router, store, _dir) = fixture_with_admin(ADMIN_TOKEN).await;

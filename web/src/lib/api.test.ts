@@ -278,4 +278,29 @@ describe('api.admin.retention', () => {
       event_retention_days: 7
     });
   });
+
+  it('getStorage GETs /api/admin/storage and parses the snapshot', async () => {
+    const fetch = mockFetch({
+      ok: true,
+      json: { bytes: 1_500_000, issues: 12, events: 420, oldest_event_age_days: 5 }
+    });
+    const s = await api.admin.getStorage();
+    expect(s.bytes).toBe(1_500_000);
+    expect(s.issues).toBe(12);
+    expect(s.events).toBe(420);
+    expect(s.oldest_event_age_days).toBe(5);
+    const [url] = fetch.mock.calls[0]!;
+    expect(url).toBe('/api/admin/storage');
+  });
+
+  // `oldest_event_age_days` is `null` on a fresh DB; the typed shape needs
+  // to round-trip the JSON null through to the field, not coerce it away.
+  it('getStorage preserves null oldest_event_age_days on empty DB', async () => {
+    mockFetch({
+      ok: true,
+      json: { bytes: 4096, issues: 0, events: 0, oldest_event_age_days: null }
+    });
+    const s = await api.admin.getStorage();
+    expect(s.oldest_event_age_days).toBeNull();
+  });
 });

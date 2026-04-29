@@ -6,6 +6,7 @@ afterEach(() => {
   // Reset singleton state so tests don't bleed.
   retention.current = { events_per_issue_max: 0, issues_per_project_max: 0, event_retention_days: 0 };
   retention.draft = { events_per_issue_max: 0, issues_per_project_max: 0, event_retention_days: 0 };
+  retention.stats = null;
   retention.error = null;
   retention.saving = false;
   retention.loading = false;
@@ -85,5 +86,32 @@ describe('retention store', () => {
     const ok = await retention.save();
     expect(ok).toBe(false);
     expect(retention.error).toBe('invalid');
+  });
+
+  it('loadStats fills stats from /api/admin/storage', async () => {
+    const fetch = mockOk({ bytes: 142_000_000, issues: 3217, events: 84512, oldest_event_age_days: 47 });
+    await retention.loadStats();
+    expect(retention.stats).not.toBeNull();
+    expect(retention.stats?.bytes).toBe(142_000_000);
+    expect(retention.stats?.issues).toBe(3217);
+    expect(retention.stats?.oldest_event_age_days).toBe(47);
+    const [url] = fetch.mock.calls[0]!;
+    expect(url).toBe('/api/admin/storage');
+  });
+
+  it('loadStats tolerates a 403 by leaving stats null and surfacing forbidden', async () => {
+    mockErr(403, 'admin only');
+    await retention.loadStats();
+    expect(retention.stats).toBeNull();
+    expect(retention.error).toBe('forbidden');
+  });
+
+  it('activeLimitCount counts non-zero draft limits', () => {
+    retention.draft = { events_per_issue_max: 0, issues_per_project_max: 0, event_retention_days: 0 };
+    expect(retention.activeLimitCount).toBe(0);
+    retention.draft = { events_per_issue_max: 100, issues_per_project_max: 0, event_retention_days: 0 };
+    expect(retention.activeLimitCount).toBe(1);
+    retention.draft = { events_per_issue_max: 100, issues_per_project_max: 500, event_retention_days: 30 };
+    expect(retention.activeLimitCount).toBe(3);
   });
 });

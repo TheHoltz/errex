@@ -5,7 +5,7 @@
 // snapshot lives in `current`, and `dirty` is derived. Saving
 // resyncs both.
 
-import { api, HttpError, type RetentionSettings } from './api';
+import { api, HttpError, type RetentionSettings, type StorageStats } from './api';
 
 export type RetentionError = 'unauthorized' | 'forbidden' | 'invalid' | 'network' | null;
 
@@ -20,6 +20,8 @@ class RetentionStore {
   current = $state<RetentionSettings>({ ...ZERO });
   /** Form-bound editable copy. */
   draft = $state<RetentionSettings>({ ...ZERO });
+  /** Snapshot of the daemon's current storage state. `null` until loaded. */
+  stats = $state<StorageStats | null>(null);
   loading = $state(false);
   saving = $state(false);
   error = $state<RetentionError>(null);
@@ -33,6 +35,16 @@ class RetentionStore {
     );
   }
 
+  /** How many of the three retention limits are actively bounded
+   *  (non-zero) on the draft. Drives the "{n}/3 active" header chip. */
+  get activeLimitCount(): number {
+    let n = 0;
+    if (this.draft.events_per_issue_max > 0) n++;
+    if (this.draft.issues_per_project_max > 0) n++;
+    if (this.draft.event_retention_days > 0) n++;
+    return n;
+  }
+
   async load(): Promise<void> {
     this.loading = true;
     this.error = null;
@@ -44,6 +56,23 @@ class RetentionStore {
       this.error = mapError(err);
     } finally {
       this.loading = false;
+    }
+  }
+
+  /** Pull the storage snapshot. Independent from `load()` so the page can
+   *  fetch both in parallel and so a stats failure doesn't block the form. */
+  async loadStats(): Promise<void> {
+    try {
+      const s = await api.admin.getStorage();
+      this.stats = s;
+    } catch (err) {
+      // Surface the auth-relevant failures through the same `error` field
+      // so the page-level toast can react. Network blips just leave stats
+      // as `null` — the header degrades to "—" instead of crashing.
+      const mapped = mapError(err);
+      if (mapped === 'unauthorized' || mapped === 'forbidden') {
+        this.error = mapped;
+      }
     }
   }
 

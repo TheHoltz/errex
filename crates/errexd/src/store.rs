@@ -120,6 +120,25 @@ pub struct Store {
     pool: SqlitePool,
 }
 
+/// Snapshot returned by `Store::storage_stats`. Drives the Retention
+/// settings header so the operator can see how big their DB is and
+/// how much history they're holding before tightening any limit.
+///
+/// `bytes` is computed from `pragma page_count * page_size`, which
+/// counts every page reachable from the SQLite file (including free
+/// pages from prior deletions). It excludes the `-wal` and `-shm`
+/// sidecar files; for a self-host workload the difference is small
+/// and the number is stable across reads.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct StorageStats {
+    pub bytes: i64,
+    pub issues: i64,
+    pub events: i64,
+    /// `None` when no events have been ingested. Otherwise the integer
+    /// number of days between `now` and the oldest `events.received_at`.
+    pub oldest_event_age_days: Option<i64>,
+}
+
 /// Operator-configurable retention bounds. Defaults are 0 = "unlimited"
 /// so a fresh DB matches pre-feature behavior. The retention task reads
 /// these every tick, so a UI change takes effect on the next purge run.
@@ -714,6 +733,42 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Snapshot of DB size + row counts + oldest-event age, for the
+    /// Retention settings header. All four facts come from a single
+    /// connection so they're consistent under concurrent writes (the
+    /// SQLite reader sees a snapshot at first query time in WAL mode).
+    pub async fn storage_stats(&self) -> Result<StorageStats, DaemonError> {
+        // page_count * page_size gives the on-disk size of the main DB
+        // file. We multiply server-side rather than fetching two pragmas
+        // and folding them in Rust, so the round-trip cost is one query.
+        let (bytes,): (i64,) = sqlx::query_as(
+            "SELECT (SELECT page_count FROM pragma_page_count) * \
+                    (SELECT page_size  FROM pragma_page_size)",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let (issues,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM issues")
+            .fetch_one(&self.pool)
+            .await?;
+        let (events,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM events")
+            .fetch_one(&self.pool)
+            .await?;
+        // We compute the age in SQLite via JULIANDAY so the result is a
+        // stable integer regardless of host timezone or daylight-savings
+        // edges. NULL when the events table is empty.
+        let oldest: Option<f64> =
+            sqlx::query_scalar("SELECT JULIANDAY('now') - JULIANDAY(MIN(received_at)) FROM events")
+                .fetch_one(&self.pool)
+                .await?;
+        let oldest_event_age_days = oldest.map(|d| d.floor() as i64);
+        Ok(StorageStats {
+            bytes,
+            issues,
+            events,
+            oldest_event_age_days,
+        })
     }
 
     /// Bound the per-issue event count to `max`, dropping oldest rows past

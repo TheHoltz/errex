@@ -28,7 +28,7 @@ mod error;
 #[path = "../src/store.rs"]
 mod store;
 
-use store::{BatchUpsertInput, RetentionSettings, Role, Store};
+use store::{BatchUpsertInput, RetentionSettings, Role, StorageStats, Store};
 
 // ----- helpers -----
 
@@ -2079,6 +2079,87 @@ async fn count_recent_failures_for_ip_aggregates_across_usernames() {
     assert_eq!(
         n, 3,
         "IP-bucketed lockout must count across all usernames AND null-username probes"
+    );
+}
+
+// ----- storage_stats -----
+//
+// `/api/admin/storage` is the readout that powers the Retention settings
+// header (DB size, issue/event counts, age of oldest event). It MUST
+// return monotone-correct numbers from a real Store, because the UI
+// renders them as the literal answer to "how big is this?".
+
+#[tokio::test]
+async fn storage_stats_empty_db_has_no_rows() {
+    let (store, _dir) = fresh_store().await;
+    let s: StorageStats = store.storage_stats().await.unwrap();
+    // page_count * page_size for a freshly-migrated DB is non-zero —
+    // SQLite always allocates the schema header + the `_sqlx_migrations`
+    // table on open. Anything > 0 is fine for the assertion.
+    assert!(s.bytes > 0, "fresh DB should report non-zero bytes");
+    assert_eq!(s.issues, 0);
+    assert_eq!(s.events, 0);
+    assert_eq!(s.oldest_event_age_days, None);
+}
+
+#[tokio::test]
+async fn storage_stats_counts_issues_and_events() {
+    let (store, _dir) = fresh_store().await;
+    // Two issues, three events on the first, two on the second → 5 events.
+    let i1 = store
+        .upsert_issue("p", &fp("a"), "T1", None, None, Utc::now())
+        .await
+        .unwrap();
+    let i2 = store
+        .upsert_issue("p", &fp("b"), "T2", None, None, Utc::now())
+        .await
+        .unwrap();
+    for n in 0..3 {
+        let mut ev = sample_event("Boom", "v", "f", n);
+        ev.event_id = Uuid::new_v4();
+        store.insert_event(i1.issue.id, &ev).await.unwrap();
+    }
+    for n in 0..2 {
+        let mut ev = sample_event("Bang", "v", "g", n);
+        ev.event_id = Uuid::new_v4();
+        store.insert_event(i2.issue.id, &ev).await.unwrap();
+    }
+    let s = store.storage_stats().await.unwrap();
+    assert_eq!(s.issues, 2);
+    assert_eq!(s.events, 5);
+    // Bytes growth from row inserts is real. The assertion is qualitative
+    // because exact size depends on SQLite's page allocation strategy.
+    assert!(s.bytes > 0);
+}
+
+#[tokio::test]
+async fn storage_stats_oldest_event_age_reflects_received_at() {
+    let (store, _dir) = fresh_store().await;
+    let issue = store
+        .upsert_issue("p", &fp("c"), "T", None, None, Utc::now())
+        .await
+        .unwrap();
+    let mut ev = sample_event("Old", "v", "f", 1);
+    ev.event_id = Uuid::new_v4();
+    store.insert_event(issue.issue.id, &ev).await.unwrap();
+
+    // Backdate the row by 7 days so we can assert on the readback.
+    let backdated = (Utc::now() - Duration::days(7)).to_rfc3339();
+    sqlx::query("UPDATE events SET received_at = ? WHERE issue_id = ?")
+        .bind(&backdated)
+        .bind(issue.issue.id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+
+    let s = store.storage_stats().await.unwrap();
+    let age = s
+        .oldest_event_age_days
+        .expect("oldest event age should be reported");
+    // Allow off-by-one for clock drift between the test and the SQL query.
+    assert!(
+        (6..=8).contains(&age),
+        "oldest event age should be ~7d, got {age}"
     );
 }
 

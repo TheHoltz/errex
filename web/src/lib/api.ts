@@ -254,7 +254,9 @@ export const api = {
 
     getRetention: () => authedGet<RetentionSettings>('/api/admin/retention'),
     setRetention: (s: RetentionSettings) =>
-      authedSend<RetentionSettings>('PUT', '/api/admin/retention', s)
+      authedSend<RetentionSettings>('PUT', '/api/admin/retention', s),
+
+    getStorage: () => authedGet<StorageStats>('/api/admin/storage')
   }
 };
 
@@ -265,4 +267,15 @@ export interface RetentionSettings {
   events_per_issue_max: number;
   issues_per_project_max: number;
   event_retention_days: number;
+}
+
+/** Snapshot returned by `/api/admin/storage`. Drives the Retention page
+ *  header so the operator can see how much history the daemon is holding
+ *  before tightening any limit. Mirrors `StorageStats` in `store.rs`. */
+export interface StorageStats {
+  bytes: number;
+  issues: number;
+  events: number;
+  /** `null` when no events have been ingested. */
+  oldest_event_age_days: number | null;
 }
