@@ -57,24 +57,130 @@ pub async fn handler(uri: Uri) -> Response {
         .into_response()
 }
 
-fn file_response(path: &str, body: &[u8]) -> Response {
-    // Hand-rolled lookup: the SPA build emits seven file types; a full
-    // mime database (mime_guess) carries hundreds of mappings as static
-    // tables that just sit in the binary's resident pages.
-    let mime = match path.rsplit_once('.').map(|(_, ext)| ext) {
+/// Hand-rolled mime lookup. The SPA build emits a small, known set of
+/// file types; a full mime database (mime_guess) carried hundreds of
+/// mappings as static tables that just sat in the binary's resident
+/// pages.
+///
+/// Unknown extensions fall back to `application/octet-stream`. The
+/// `spa_mime_coverage` integration test asserts every extension that
+/// actually appears in `web/build/` is covered explicitly so a future
+/// SvelteKit build that emits, say, `.map` sourcemaps or `.wasm`
+/// modules can't silently regress to the fallback.
+pub(crate) fn mime_for_path(path: &str) -> &'static str {
+    match path.rsplit_once('.').map(|(_, ext)| ext) {
         Some("html") => "text/html; charset=utf-8",
         Some("js") => "application/javascript",
         Some("css") => "text/css; charset=utf-8",
         Some("json") => "application/json",
         Some("svg") => "image/svg+xml",
         Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("ico") => "image/x-icon",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        Some("avif") => "image/avif",
+        Some("gif") => "image/gif",
+        Some("wasm") => "application/wasm",
+        Some("map") => "application/json",
         Some("txt") => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
-    };
+    }
+}
 
+fn file_response(path: &str, body: &[u8]) -> Response {
     Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, mime)
+        .header(header::CONTENT_TYPE, mime_for_path(path))
         .body(Body::from(body.to_vec()))
         .expect("static response builder")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_extensions_map_correctly() {
+        assert_eq!(mime_for_path("index.html"), "text/html; charset=utf-8");
+        assert_eq!(mime_for_path("a/b.js"), "application/javascript");
+        assert_eq!(mime_for_path("0.css"), "text/css; charset=utf-8");
+        assert_eq!(mime_for_path("env.json"), "application/json");
+        assert_eq!(mime_for_path("favicon.svg"), "image/svg+xml");
+        assert_eq!(mime_for_path("font.woff2"), "font/woff2");
+        assert_eq!(mime_for_path("robots.txt"), "text/plain; charset=utf-8");
+    }
+
+    #[test]
+    fn defensive_extensions_for_future_spa_builds() {
+        // Cover the extensions a future SvelteKit build is most likely to
+        // start emitting (sourcemaps, raster images, wasm). These don't
+        // appear in today's build but should not silently regress to
+        // octet-stream when they do — browsers refuse to execute wasm
+        // served as octet-stream.
+        assert_eq!(mime_for_path("chunk.js.map"), "application/json");
+        assert_eq!(mime_for_path("hero.png"), "image/png");
+        assert_eq!(mime_for_path("hero.webp"), "image/webp");
+        assert_eq!(mime_for_path("worker.wasm"), "application/wasm");
+        assert_eq!(mime_for_path("favicon.ico"), "image/x-icon");
+    }
+
+    #[test]
+    fn unknown_extension_falls_back_to_octet_stream() {
+        assert_eq!(mime_for_path("x.xyzqq"), "application/octet-stream");
+        assert_eq!(mime_for_path("noext"), "application/octet-stream");
+    }
+
+    /// Scan the actual `web/build/` directory and assert every
+    /// extension that landed in it has an explicit mapping. Skips
+    /// silently when the directory is empty (CI may run before
+    /// `bun run build`); fails when *any* file under the tree has
+    /// an extension that falls back to `application/octet-stream`.
+    /// This is the build-time tripwire for "SvelteKit started
+    /// emitting a new format and we forgot to update the lookup".
+    #[test]
+    fn spa_build_extensions_all_covered() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let build_dir = std::path::Path::new(manifest_dir).join("../../web/build");
+        let Ok(build_dir) = build_dir.canonicalize() else {
+            // `web/build/` not present (e.g. fresh CI checkout before
+            // bun build). Nothing to scan; let other tests cover.
+            return;
+        };
+
+        let mut uncovered: Vec<(String, String)> = Vec::new();
+        walk(&build_dir, &mut |path| {
+            let path_str = path.to_string_lossy().into_owned();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_string();
+            if mime_for_path(&path_str) == "application/octet-stream" {
+                uncovered.push((path_str, ext));
+            }
+        });
+
+        assert!(
+            uncovered.is_empty(),
+            "SPA file(s) under web/build/ have no mime mapping (would be served as application/octet-stream): {:#?}",
+            uncovered,
+        );
+    }
+
+    fn walk(root: &std::path::Path, cb: &mut dyn FnMut(&std::path::Path)) {
+        let Ok(rd) = std::fs::read_dir(root) else {
+            return;
+        };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                walk(&p, cb);
+            } else if p.is_file() {
+                cb(&p);
+            }
+        }
+    }
 }

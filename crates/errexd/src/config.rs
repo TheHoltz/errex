@@ -41,7 +41,10 @@ pub struct Config {
     #[arg(long, env = "ERREX_MCP_PORT", default_value_t = 9092)]
     pub mcp_port: u16,
 
-    /// Logging level when RUST_LOG is unset.
+    /// Daemon log level. Accepts `trace`, `debug`, `info`, `warn`, `error`.
+    /// Per-target directives (`RUST_LOG=foo::bar=debug`) are not supported —
+    /// the directive parser pulled in ~1 MB of regex-automata rodata that
+    /// self-hosters never exercised.
     #[arg(long, env = "ERREX_LOG_LEVEL", default_value = "info")]
     pub log_level: String,
 
