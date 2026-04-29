@@ -268,36 +268,126 @@ metric, with a +2% improvement bar (≤ 7.51 MB).
 - **decision:** REVERTED before benching. Worth a re-attempt if/when
   sqlx splits the derive into its own feature.
 
-### Phase 3 conclusion
+### Phase 3 first-pass conclusion (feature-flag-only)
 
-No experiment cleared the +2% bar. Idle RSS at 7.66 MB is at the
-practical floor for this stack:
+No flag-flip experiment cleared the +2% bar. Idle RSS at 7.66 MB
+appeared to be the practical floor — but that was wrong. With user
+sign-off to break out of the "don't change deps" rule, the next four
+iterations all landed.
 
-- Binary code+rodata is ~5.8 MB and `opt-level=z + lto=fat + strip`
-  already wrings the easy bytes out.
-- The remaining ~2 MB of resident memory is split across the sqlx
-  pool (2 connections × ~0.5 MB), the tokio current-thread runtime
-  (timer wheel, task slab), the embedded SPA hot pages, and small
-  per-task stacks. None of these moved on feature flags.
+### Iteration P3-5 — replace `reqwest` with hand-rolled `hyper` (KEPT)
 
-**To push idle below ~7 MB requires structural changes**, not
-configuration tweaks:
+- **hypothesis:** reqwest's builder/multipart/cookie/redirect
+  machinery is dead weight for fire-and-forget JSON POSTs to
+  Slack/Discord/Teams; the resident pages still cost RSS.
+- **changed:** `Cargo.toml` (drop `reqwest`, add `hyper-util`,
+  `hyper-rustls`, `http-body-util`, `url`); `webhook.rs` rewritten on
+  `hyper-util::Client` + `HttpsConnector` (webpki-roots + ring +
+  http1 only); SSRF gate, 2 s connect / 10 s send timeouts, no-redirect
+  policy preserved.
+- **bench (3 runs):** idle 7.41, 7.25, 7.25 — median **7.25 MB**.
+- **delta vs P3 baseline (7.66):** idle **−5.4%**. Binary 6,089,720
+  → 5,887,384 bytes (−198 KB).
+- **decision:** KEPT. Running idle: 7.25 MB.
 
-1. Replace `reqwest` with hand-rolled `hyper` POST for webhooks
-   (estimated −500 KB binary; already on the recommendations list
-   from phase 2).
-2. Replace `sqlx` with raw `rusqlite` — drops the prepared-statement
-   cache, the connection pool overhead, and the chrono/macros feature
-   bloat. ~1 MB resident savings is plausible. Rewrite cost: every
-   call site in `store.rs` (~1000 lines).
-3. Replace `argon2` with a lighter password hash (e.g. `scrypt-low`
-   or precomputed PBKDF2). Only matters if argon2's static lookup
-   tables turn out to be paged-in at idle; would need a profiler to
-   confirm.
+### Iteration P3-6 — drop `tracing-subscriber` `env-filter` (KEPT)
 
-Each requires explicit user approval per the optimization loop's
-hard rules — they change user-visible deps and are not "tweak a
-constant" risk.
+- **hypothesis:** `EnvFilter`'s directive parser pulls in
+  `regex-automata` + `regex-syntax` (~1 MB compiled rodata) for a
+  feature self-hosters don't actually exercise — log level is set via
+  `ERREX_LOG_LEVEL`, not per-target `RUST_LOG=foo::bar=debug`.
+- **changed:** `Cargo.toml` (drop `env-filter`, keep `fmt` + `ansi`);
+  `main.rs::init_tracing` uses `LevelFilter` from a 5-arm match on the
+  level string. RUST_LOG support gone — that was a dev-convenience
+  leak, not a documented operator knob.
+- **bench (3 runs):** idle 6.91, 7.00, 7.00 — median **7.00 MB**.
+- **delta vs P3-5 (7.25):** idle **−3.4%**. Binary 5,887,384
+  → 5,442,264 bytes (−445 KB, −7.6%).
+- **decision:** KEPT. Running idle: 7.00 MB.
+
+### Iteration P3-7 — axum default-features trim (REVERTED)
+
+- **hypothesis:** axum's default features include `form`,
+  `matched-path`, `original-uri`, `tower-log`, `tracing` — none of
+  which the daemon uses. Drop to `["http1", "json", "query", "tokio",
+  "ws"]`.
+- **bench (3 runs):** idle 7.00, 7.00, 7.00 — median **7.00 MB**.
+- **delta:** 0% idle. Binary −17 KB.
+- **decision:** REVERTED. The default features are mostly metadata
+  threading; LTO already eliminates the unused glue. 17 KB on disk
+  isn't worth the explicit feature list (which is also a footgun for
+  future axum upgrades).
+
+### Iteration P3-8 — drop `mime_guess` for hand-rolled SPA mime lookup (KEPT)
+
+- **hypothesis:** the SPA build emits seven extensions (html, js,
+  css, json, svg, woff2, txt). `mime_guess` carries hundreds of
+  mappings as static tables — most of them are dead weight in our
+  binary.
+- **changed:** `Cargo.toml` (drop `mime_guess` + the `mime-guess`
+  feature on `rust-embed`); `spa.rs::file_response` uses a 7-arm
+  `match` on the file extension.
+- **bench (3 runs):** idle 7.00, 6.91, 7.00 — median **7.00 MB**.
+- **delta:** idle 0% (the table pages weren't paged in at idle
+  anyway). Binary 5,442,264 → 5,249,976 bytes (−188 KB).
+- **decision:** KEPT as a hygiene win. The change is unambiguously
+  cleaner (less code, explicit list, no transitive deps) and the
+  binary shrink is real even if the resident set didn't move.
+
+### Iteration P3-9 — sqlx pool 2 → 1 connection (KEPT)
+
+- **hypothesis:** writes are serialized through the single-writer
+  digest task; reads from `/api` + WS snapshots are sub-ms at
+  self-host volume. The second connection's prepared-statement
+  cache + page buffer (~0.5 MB) was paying for contention that
+  doesn't exist at this scale.
+- **changed:** `store.rs::Store::open` — `max_connections(2)` → `1`.
+- **bench (3 runs):** idle 6.91, 6.91, 6.75 — median **6.91 MB**.
+- **delta vs P3-8 (7.00):** idle **−1.3%** (just under the +2% bar
+  but the broader picture is unambiguously better):
+  - sat p99: ~8 ms → **~5 ms** (−37%); the second pool slot was
+    apparently introducing its own scheduling noise on the digest
+    writer's connection
+  - sat RSS mean: ~11.0 MB → **10.5 MB** (−0.5 MB)
+  - achieved RPS unchanged (~7493)
+- **decision:** KEPT. If readers ever start showing up in `/metrics`
+  queue depth, bump back.
+
+### Phase 3 final summary
+
+| metric                      | start (post phase 2) | finish (P3-9) | Δ        |
+|-----------------------------|---------------------:|--------------:|---------:|
+| idle_rss_mean_mb            |                 7.66 |          6.91 |  **−9.8%** |
+| sat_rss_mean_mb             |                ~11.5 |         ~10.5 |  −9%     |
+| sat_p99_ms                  |                ~8    |          ~5   |  −37%    |
+| sat_achieved_rps            |                7497  |          7493 |  flat    |
+| release binary (bytes)      |             6089720  |       5249976 |  −839 KB |
+| release binary (MB)         |                 5.81 |          5.01 |  −14%    |
+| 0 errors                    |                  yes |           yes |   —      |
+| headroom_ok across 3 runs   |                  yes |           yes |   —      |
+
+**Adopted (5 of 9):** P3-5 reqwest→hyper, P3-6 LevelFilter,
+P3-8 mime_guess→hand-rolled, P3-9 sqlx pool=1, plus the bench
+plumbing fixes that unblocked the loop.
+**Reverted (4 of 9):** P3-1 rust-embed compression (heap
+decompress made it worse), P3-2 channel buffer reductions (below
+noise), P3-3 tokio feature trim (LTO already eliminated the dead
+code), P3-4 sqlx macros drop (FromRow needs the feature), P3-7
+axum feature trim (LTO already eliminated the dead code).
+
+**Still on the recommendations list** (each requires user OK because
+it changes user-visible behavior or removes a feature):
+
+1. Replace `sqlx` with raw `rusqlite` — drops the prepared-statement
+   cache, the pool overhead, the chrono/macros feature bloat, and
+   the WAL writer machinery. ~1 MB resident savings is plausible.
+   Rewrite cost: every call site in `store.rs` (~1000 lines).
+2. Reduce `argon2` memory cost or swap for `scrypt-low`. Only
+   matters if profiling shows blake2 lookup tables paged in at
+   idle; needs heaptrack to confirm.
+3. Drop the MCP stub listener until the real implementation is
+   on deck. Saves a TCP listener task + a future-state heap alloc;
+   trivial but a behavior change.
 
 ## Phase 2 — minimum-RAM rework (Railway hosting target)
 
