@@ -176,6 +176,129 @@ because it changes user-visible behavior or removes a feature):**
 3. Consider switching from `clap` to a hand-rolled CLI parser.
    ~50 KB binary saving, somewhat ugly DX.
 
+## Phase 3 — re-baseline + autonomous experiment loop (2026-04-29)
+
+User asked: can C++ shave more memory? Answered no, then ran an
+autonomous experiment loop on the suggested levers (compression, channel
+sizes, tokio feature trim, sqlx feature trim) to verify.
+
+### Bench plumbing fixes (kept)
+
+- `multibench.sh`/`bench.sh` were broken on `main` HEAD:
+  - `ERREX_PORT` env was not picked up by the daemon (clap quirk on
+    `Option<u16>` with `env`). Switched bench to pass `--http-port` and
+    `--mcp-port` as explicit flags.
+  - The `7f2f535` security commit added `state.require_auth` gating on
+    ingest. Bench now sets `ERREX_REQUIRE_AUTH=false` so the harness's
+    cookie-less POSTs aren't 401'd.
+- These are bench-only changes; daemon behavior is untouched.
+
+### Phase 3 baseline (post-security/retention/docker churn)
+
+3 multibench runs on a clean build of `main`:
+
+| run | idle_rss_mean_mb | sat_rps | sat_p99_ms |
+|----:|-----------------:|--------:|-----------:|
+| 1   | 7.50 | 4532 | 24.21 |
+| 2   | 7.66 | 3888 | 25.20 |
+| 3   | 7.75 | 4871 | 23.34 |
+
+**Median idle = 7.66 MB.** Saturation throughput was suppressed across
+the run by an unrelated 32-core ML training process pinning the host
+(load avg 33). Idle measurement is robust to this — the daemon is
+literally idle — so phase 3 used **idle RSS only** as the decision
+metric, with a +2% improvement bar (≤ 7.51 MB).
+
+### Iteration P3-1 — `rust-embed` `compression` feature (REVERTED)
+
+- **hypothesis:** compress the 636 KB embedded SPA at build time;
+  smaller on-disk binary → smaller mapped pages → smaller idle RSS.
+- **changed:** `Cargo.toml` (add `"compression"` to `rust-embed`
+  features), `crates/errexd/src/spa.rs` (relative folder path required
+  by the feature: `$CARGO_MANIFEST_DIR/../../web/build/` →
+  `../../web/build/`).
+- **bench (3 runs):** idle 8.00, 8.00, 8.16 — median **8.00 MB**.
+- **delta:** **+4.4% vs baseline** (worse).
+- **decision:** REVERTED.
+- **why it loses:** rust-embed's `compression` stores gzipped bytes in
+  the binary, but the `EmbeddedFile::data` accessor *decompresses on
+  every call into a heap `Cow::Owned`*. The multibench warmup faults in
+  every SPA file → every file gets decompressed onto the heap. Net
+  effect: binary -47 KB (gzipped pages), heap +decompressed bytes
+  (≥ 636 KB across all files). The on-disk shrink is real, but the
+  resident set grows because we now hold both forms.
+
+### Iteration P3-2 — channel buffer reductions (REVERTED)
+
+- **hypothesis:** smaller pre-allocated channel rings reduce idle
+  bookkeeping.
+- **changed:** `crates/errexd/src/main.rs` — `INGEST_CHANNEL_CAPACITY`
+  256→64, `FANOUT_CHANNEL_CAPACITY` 64→16, `WEBHOOK_CHANNEL_CAPACITY`
+  64→16.
+- **bench (3 runs):** idle 7.75, 7.50, 7.75 — median **7.75 MB**.
+- **delta:** +1.2% (within run-to-run noise of ±3%).
+- **decision:** REVERTED. mpsc/broadcast pre-allocate per-slot Option
+  metadata (~40 bytes each); 256→64 saves ~10 KB at most. Below the
+  noise floor and below the 0.15 MB detection threshold.
+
+### Iteration P3-3 — `tokio` feature trim (REVERTED)
+
+- **hypothesis:** `features = ["full"]` enables runtime modules the
+  daemon doesn't use (`rt-multi-thread`, `process`, `parking_lot`,
+  `io-std`). Trim to the minimum.
+- **changed:** `Cargo.toml` — `tokio = { version = "1.38",
+  default-features = false, features = ["macros", "rt", "sync",
+  "signal", "fs", "net", "io-util", "time"] }`.
+- **bench (3 runs):** idle 7.75, 7.66, 7.50 — median **7.66 MB**.
+- **delta:** 0% (identical to baseline). Binary -39 KB.
+- **decision:** REVERTED. LTO=fat already eliminates the unused tokio
+  modules from the binary at link time, so the feature trim had no
+  measurable runtime effect. The 39 KB binary saving is real but
+  doesn't translate to idle RSS, which is the metric the user pays for.
+
+### Iteration P3-4 — drop `sqlx` `macros` feature (BUILD FAIL → REVERTED)
+
+- **hypothesis:** the codebase uses `sqlx::query("…")` (string-literal
+  form), not the `query!`/`query_as!` compile-time-checked macros, so
+  the `macros` feature is dead weight.
+- **changed:** `Cargo.toml` — drop `"macros"` from the `sqlx` feature
+  list.
+- **result:** 36 build errors. The `FromRow` derive (used on every row
+  type in `store.rs`) lives behind the same `macros` feature gate.
+- **decision:** REVERTED before benching. Worth a re-attempt if/when
+  sqlx splits the derive into its own feature.
+
+### Phase 3 conclusion
+
+No experiment cleared the +2% bar. Idle RSS at 7.66 MB is at the
+practical floor for this stack:
+
+- Binary code+rodata is ~5.8 MB and `opt-level=z + lto=fat + strip`
+  already wrings the easy bytes out.
+- The remaining ~2 MB of resident memory is split across the sqlx
+  pool (2 connections × ~0.5 MB), the tokio current-thread runtime
+  (timer wheel, task slab), the embedded SPA hot pages, and small
+  per-task stacks. None of these moved on feature flags.
+
+**To push idle below ~7 MB requires structural changes**, not
+configuration tweaks:
+
+1. Replace `reqwest` with hand-rolled `hyper` POST for webhooks
+   (estimated −500 KB binary; already on the recommendations list
+   from phase 2).
+2. Replace `sqlx` with raw `rusqlite` — drops the prepared-statement
+   cache, the connection pool overhead, and the chrono/macros feature
+   bloat. ~1 MB resident savings is plausible. Rewrite cost: every
+   call site in `store.rs` (~1000 lines).
+3. Replace `argon2` with a lighter password hash (e.g. `scrypt-low`
+   or precomputed PBKDF2). Only matters if argon2's static lookup
+   tables turn out to be paged-in at idle; would need a profiler to
+   confirm.
+
+Each requires explicit user approval per the optimization loop's
+hard rules — they change user-visible deps and are not "tweak a
+constant" risk.
+
 ## Phase 2 — minimum-RAM rework (Railway hosting target)
 
 After iter 10 plateau, rebooting the loop with a hosting-cost-aligned

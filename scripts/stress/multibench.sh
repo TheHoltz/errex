@@ -40,11 +40,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 ERREX_DATA_DIR="$DATA" \
-ERREX_PORT="$PORT" \
-ERREX_MCP_PORT="$MCP_PORT" \
 ERREX_LOG_LEVEL=warn \
 ERREX_RATE_LIMIT_PER_MIN=0 \
-  taskset -c "$PIN_CPU" "$BIN" >/dev/null 2>&1 &
+ERREX_REQUIRE_AUTH=false \
+  taskset -c "$PIN_CPU" "$BIN" --http-port "$PORT" --mcp-port "$MCP_PORT" >/dev/null 2>&1 &
 PID=$!
 
 # Wait for ready.
