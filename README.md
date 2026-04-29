@@ -11,67 +11,13 @@
 
 <br>
 
-<img src="./docs/screenshots/dashboard.png" alt="errex dashboard" width="900" />
+<img src="./docs/screenshots/dashboard-2.png" alt="errex dashboard — issue list with live event counts and stack-trace pane" width="900" />
+
+<sub><i>Live issue list. Counts and "last seen" timestamps update over WebSocket as events arrive — no polling.</i></sub>
 
 </div>
 
-## About
-
-errex is a tiny, **self-hostable error tracker** for people who want their own error inbox without standing up Sentry's Postgres + Redis + Kafka stack. Drop any **Sentry SDK** into your app, point it at errex, and you get grouped exceptions, stack traces, occurrence counts, regression detection, and Slack / Discord / Teams alerts.
-
-The whole thing is **one 5 MB Rust binary** with a fast **SvelteKit dashboard** embedded. Persistence is a single **SQLite** file (no Postgres, no Redis). The ingest pipeline is single-writer with bounded buffers — backpressure, not unbounded queues.
-
-errex is also **MCP-ready**: an AI agent can plug straight into the daemon to triage issues, summarize stack traces, and resolve duplicates without touching the dashboard. (Stub today; the protocol surface is wired.)
-
-If you're an indie dev, a homelabber, or running a small product, this is probably what you wanted Sentry to be — **error monitoring that fits on the same $5 VPS as your app, with room to spare**.
-
-## Numbers (measured, not estimated)
-
-Single CPU, 30-second sustained workload, daemon `taskset -c 0`-pinned. **Idle is post-warmup** — every SPA asset (HTML + JS bundles + favicon) has been served at least once, so the dashboard is "loaded into memory" the way it would be after one operator opens it.
-
-| operating point                       | achieved RPS | p99 ingest | RSS mean   | RSS max |
-|---------------------------------------|-------------:|-----------:|-----------:|--------:|
-| **idle** (daemon + SPA warm)          |          —   |        —   | **6.9 MB** |  7.0 MB |
-| **typical** (100 RPS)                 |          100 |     <2 ms  | **9.8 MB** | 10.0 MB |
-| **saturation** (8000 target)          |         7491 |    4.9 ms  | **10.5 MB**| 10.8 MB |
-| **96 MB cgroup cap**, 4k RPS, 60 s    |         2712 |   32.8 ms  | 77 MB †    | 96 MB † |
-
-† Cgroup memory includes kernel page cache for SQLite WAL/SHM/db files — that's what `MemoryMax=` actually enforces and what an operator pays for. **0 OOM kills, 0 ingest errors, 0 dashboard errors** under that cap.
-
-Stripped binary (daemon + embedded SPA + assets): **5.01 MB**. Zero ingest errors at every operating point. WebSocket fan-out is lossless to 64 subscribers under sustained load. Reproduce any of these with `scripts/stress/multibench.sh` and `scripts/stress/prod_test.sh`.
-
-### What this means for hosting cost
-
-- **Smallest sane tier: 128 MB.** Daemon + WAL page cache fit comfortably with crash margin.
-- The smallest tier on Railway / Fly / Render / etc. is **256 MB**. errex uses **2.7%** of that at idle.
-- 100 RPS sustained leaves **96% of a 256 MB tier free** for your other workloads.
-- Spike to 8000 events/sec: still sub-11 MB daemon RSS. No tier upgrade needed.
-- **No memory cliff under cgroup pressure.** Survived sustained 4k RPS at a 96 MB cap with 0 OOM kills, 0 errors. Kernel reclaims page cache on demand.
-- **Live dashboard updates over WebSocket.** Browser-validated end-to-end: events appear in the SPA in under 100 ms after ingest. No polling, no stale counters.
-- Frontend is included — no second container, no nginx in front of static files, no extra service to provision.
-- Compare:
-
-| | min RAM | binary | external deps | services | dashboard | install |
-|---|---:|---:|---|---:|---|---|
-| **errex** | **~7 MB** | **5 MB** | none | **1** | embedded | one binary |
-| GlitchTip | ~512 MB | n/a | Postgres + Redis | 3 | separate | docker-compose |
-| Sentry self-host | ~4 GB | n/a | Postgres + Redis + Kafka + Snuba + Clickhouse | ~10 | separate | full stack |
-
-> [!NOTE]
-> errex is **alpha**. The hot path (ingest → group → store → broadcast) is wired and tested end-to-end. Source maps and multi-tenant orgs aren't shipped yet — see [Status](#status). Numbers above are single-host bench results; multi-day soak, 100+ simultaneous dashboard users, and login spikes (argon2 transient memory) have not been stress-validated. Plan headroom accordingly.
-
-## Validated
-
-- **432 tests** across daemon + SPA, all green
-- `scripts/stress/multibench.sh` — measures idle, low, and saturation in one run
-- `scripts/stress/prod_test.sh` — drives ingest + dashboard polling + WS subs under enforced `MemoryMax=` and `CPUQuota=` cgroups; the row above came from this
-- `tests/concurrency.rs` — pins the read-vs-write contract: 16 reader tasks + 1 writer, p99 read < 100 ms
-- `tests/spa.rs` — pins SPA mime coverage: CI fails if a future SvelteKit asset type lands without an explicit content-type mapping
-- Real-browser smoke via Chrome DevTools MCP: SPA loads, login flow works end-to-end, live counters update over WebSocket from a curl-driven ingest stream, 0 console errors, 0 4xx/5xx
-
-## Install
-
-The fastest path is the prebuilt container — multi-arch (amd64 + arm64), 5 MB stripped binary inside, no dependencies:
+## Run it
 
 ```bash
 docker run -d --name errex \
@@ -81,30 +27,65 @@ docker run -d --name errex \
   ghcr.io/theholtz/errex:latest
 ```
 
-Open <http://localhost:9090/setup>, paste the admin token from the env, finish the wizard. Done.
+Open <http://localhost:9090/setup>, paste the admin token from the env, finish the wizard.
 
-Or build from source:
+Multi-arch (amd64 + arm64). The full env / CLI reference is in [docs/CONFIGURATION.md](./docs/CONFIGURATION.md). To build from source: `git clone … && docker compose -f docker/docker-compose.yml up -d`.
 
-```bash
-git clone https://github.com/TheHoltz/errex
-cd errex
-docker compose -f docker/docker-compose.yml up -d
-```
+## What it is
 
-The full env / CLI reference is in [docs/CONFIGURATION.md](./docs/CONFIGURATION.md).
+errex is a small self-hostable error tracker for people who want their own error inbox without standing up Sentry's Postgres + Redis + Kafka stack. Drop any Sentry SDK into your app, point it at errex, and you get grouped exceptions, stack traces, occurrence counts, regression detection, and Slack / Discord / Teams alerts.
 
+The whole thing is one Rust binary with a SvelteKit dashboard embedded. Persistence is a single SQLite file (no Postgres, no Redis). The ingest pipeline is single-writer with bounded buffers — backpressure, not unbounded queues.
+
+errex is also MCP-ready: an AI agent can plug straight into the daemon to triage issues, summarize stack traces, and resolve duplicates without touching the dashboard. (Stub today; the protocol surface is wired.)
+
+If you're an indie dev, a homelabber, or running a small product, this is probably what you wanted Sentry to be — error monitoring that fits on the same $5 VPS as your app, with room to spare.
+
+## Numbers
+
+Headline: **idle 7 MB · saturation 10.5 MB · 7,500 events/s · 5 MB binary**.
+
+| operating point              |  RPS | p99 (ms) | mean RSS (MB) | max RSS (MB) |
+|------------------------------|-----:|---------:|--------------:|-------------:|
+| idle (daemon + SPA warm)     |    — |        — |           6.9 |          7.0 |
+| typical (100 RPS sustained)  |  100 |       <2 |           9.8 |         10.0 |
+| saturation (8000 RPS target) | 7491 |      4.9 |          10.5 |         10.8 |
+
+Single CPU, daemon `taskset -c 0`-pinned, 30 s sustained, fresh tempdir SQLite. Idle is post-warmup — every SPA asset (HTML + JS bundles + favicon) has been served at least once. Reproduce with `scripts/stress/multibench.sh`.
+
+> [!IMPORTANT]
+> **Survives memory-capped bursts.** Run inside a 96 MB cgroup (`MemoryMax=96M`, `CPUQuota=100%`), driven at 4k RPS sustained for 60 s, errex held the cap with **0 OOM kills, 0 ingest errors, 0 dashboard errors**. Cgroup memory peaked at 96 MB (incl. SQLite WAL page cache); the kernel reclaimed pages on demand under pressure. Reproduce with `scripts/stress/prod_test.sh`.
+
+## What it costs to run
+
+- Smallest tier on Railway / Fly / Render is 256 MB. errex uses 2.7% of that at idle.
+- 100 RPS sustained leaves 96% of a 256 MB tier free for your other workloads.
+- Spike to 8000 events/sec stays sub-11 MB daemon RSS. No tier upgrade.
+- Frontend is included — no second container, no nginx in front of static files, no extra service.
+- Dashboard updates live over WebSocket; events appear in the SPA in <100 ms after ingest.
+
+## How it compares
+
+| | min RAM | services | install |
+|---|---:|---:|---|
+| **errex**          |  ~7 MB |  1  | one binary |
+| GlitchTip          | ~512 MB |  3  | docker-compose |
+| Sentry self-host   |   ~4 GB | ~10 | full stack (Postgres + Redis + Kafka + Snuba + Clickhouse) |
+
+> [!NOTE]
+> errex is **alpha**. The hot path (ingest → group → store → broadcast) is wired and tested end-to-end. Source maps and multi-tenant orgs aren't shipped yet — see [Status](#status). Numbers above are single-host bench results; multi-day soak, 100+ simultaneous dashboard users, and login spikes (argon2 transient memory) have not been stress-validated. Plan headroom accordingly.
+
+## Validated
+
+**Tests.** 432 across daemon + SPA, all green. Pure-logic modules and store methods covered by colocated `*.test.ts` / `tests/*.rs`. Concurrency contract pinned by `tests/concurrency.rs` (16 readers + 1 writer, p99 < 100 ms). SPA mime coverage pinned by `tests/spa.rs` — CI fails if a future SvelteKit build emits a file extension without an explicit content-type mapping.
+
+**Stress.** `scripts/stress/multibench.sh` measures idle, low load (100 RPS), and saturation (8000 RPS) in one run and emits a single JSON report. `scripts/stress/prod_test.sh` boots the daemon inside a transient `systemd-run --user --scope` cgroup with `MemoryMax=` and `CPUQuota=` enforced, then drives ingest + dashboard reader agents + WS subscribers concurrently — the cgroup-cap claim above came from this.
+
+**Real browser.** Chrome DevTools MCP test loads the SPA, runs the real login flow with cookies, opens multiple tabs, and verifies that 1,477 events ingested via curl appear live in the issue list with 0 console errors and 0 4xx/5xx responses.
 
 ## How it works
 
-```
-SDK ──envelope──▶ /api/<project>/envelope/ ──▶ digest ──▶ SQLite
-                                                  │
-                                                  ├──▶ broadcast ──▶ WebSocket ──▶ dashboard
-                                                  │
-                                                  └──▶ webhook ──▶ Slack / Discord / Teams
-```
-
-Single-writer ingest pipeline; readers hit SQLite directly via WAL. No in-memory caches. Bounded channels with intentional backpressure. The dependency footprint is deliberately tiny — see [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the design rationale.
+SDK posts a Sentry envelope to `/api/<project>/envelope/`. The HTTP handler parses, fingerprints, and hands the event to a single-writer digest task that upserts the issue and persists the event into SQLite (WAL mode). The same digest task fans the change out over `tokio::sync::broadcast` to any connected dashboard tab via WebSocket, and dispatches a webhook to Slack / Discord / Teams when the issue is new or has regressed. Readers hit SQLite directly via WAL — no in-memory caches, bounded channels with intentional backpressure. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the rationale behind each choice.
 
 ## Status
 
