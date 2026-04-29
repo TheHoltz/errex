@@ -61,8 +61,16 @@ RUN cargo build --release --bin errexd \
 
 # Stage out the data dir into a scratch tree the distroless runtime can
 # COPY in (distroless has no shell, so we can't `mkdir` there).
+#
+# We pre-create `/data/store` so the daemon's `ERREX_DATA_DIR` lands one
+# level below the mount point. Reason: Railway (and similar PaaS) mount
+# the persistent volume directly on /data, and SQLite cannot create the
+# `errex.db` + `-wal` + `-shm` files on the bare mountpoint — the open
+# fails with `(code: 14) unable to open database file`. Writing into a
+# subdirectory the daemon `mkdir`s itself dodges the mount-root quirk
+# while still keeping every byte on the persistent volume.
 FROM debian:stable-slim AS rootfs
-RUN mkdir -p /pkg/data /pkg/home
+RUN mkdir -p /pkg/data/store /pkg/home
 
 # ---------- runtime: distroless cc, single static-ish binary ----------
 #
@@ -84,7 +92,7 @@ WORKDIR /home
 VOLUME ["/data"]
 EXPOSE 9090 9091 9092
 
-ENV ERREX_DATA_DIR=/data \
+ENV ERREX_DATA_DIR=/data/store \
     ERREX_LOG_LEVEL=info
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

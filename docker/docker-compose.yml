@@ -11,14 +11,14 @@ services:
       - "9090:9090"
       - "9092:9092"
     volumes:
-      # Named volume so /data inherits the image's UID 1000 ownership.
-      # A host bind (e.g. ../data:/data) clobbers those perms with the host
-      # dir's owner, which makes SQLite fail to open the DB on any host
-      # whose UID isn't 1000. Power users who want a host-path bind should
-      # pre-create the dir with `chown 1000:1000` and swap this line.
+      # Named volume mounted at /data. The daemon writes one level down at
+      # /data/store (the image default — see docker/Dockerfile). The subdir
+      # indirection sidesteps a Railway/Fly mount-root quirk where SQLite
+      # cannot open `.db` files directly on the volume mountpoint; on
+      # docker-compose a named volume has no such restriction, but keeping
+      # the same path everywhere means one fewer environment-specific knob.
       - errex-data:/data
     environment:
-      ERREX_DATA_DIR: /data
       ERREX_LOG_LEVEL: info
       # Container-only: bind on all interfaces so the docker port mapping
       # above can reach the process. The daemon itself defaults to
