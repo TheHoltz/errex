@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderValue, Method, StatusCode};
+use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -200,6 +200,15 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .layer(SetResponseHeaderLayer::if_not_present(
             axum::http::header::X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),
+        ))
+        // `X-Robots-Tag` keeps every response — JSON, hashed assets,
+        // arbitrary deep-link paths — out of search-engine indexes even
+        // when a crawler ignores `/robots.txt` or arrives via an inbound
+        // link. errex is operator-facing telemetry; nothing here belongs
+        // in public results.
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("x-robots-tag"),
+            HeaderValue::from_static("noindex, nofollow, noarchive, nosnippet"),
         ))
 }
 

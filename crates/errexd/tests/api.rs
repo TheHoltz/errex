@@ -2214,6 +2214,29 @@ async fn security_headers_set_on_health_response() {
 }
 
 #[tokio::test]
+async fn x_robots_tag_set_on_every_response() {
+    // Defense-in-depth alongside /robots.txt — covers JSON endpoints and
+    // hashed asset URLs that crawlers might still hit via inbound links.
+    let (router, _store, _dir) = fixture().await;
+    let res = router
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let tag = res
+        .headers()
+        .get("x-robots-tag")
+        .and_then(|v| v.to_str().ok())
+        .expect("X-Robots-Tag must be set on every response");
+    assert!(tag.contains("noindex"));
+    assert!(tag.contains("nofollow"));
+}
+
+#[tokio::test]
 async fn security_headers_set_on_api_json_response() {
     let (router, store, _dir) = fixture().await;
     let cookie = signed_in_cookie(&store, store::Role::Viewer).await;
