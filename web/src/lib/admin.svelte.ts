@@ -14,6 +14,7 @@ import {
   type AdminProject,
   type DeleteSummary
 } from './api';
+import { projects } from './stores.svelte';
 
 export type AdminError = 'unauthorized' | 'forbidden' | 'network' | null;
 
@@ -23,12 +24,17 @@ class AdminStore {
   loading = $state(false);
   error = $state<AdminError>(null);
 
-  /** Load (or refresh) the admin project list. Surfaces the error state. */
+  /** Load (or refresh) the admin project list. Surfaces the error state.
+   *  Also refreshes the role-neutral `projects.available` store so the
+   *  first-run gate, project switcher, and command palette see fresh data
+   *  after every admin mutation (each mutation calls this method, so the
+   *  two stores stay locked through a single write site). */
   async loadProjects(): Promise<void> {
     this.loading = true;
     this.error = null;
     try {
       this.projects = await api.admin.listProjects();
+      projects.available = await api.projects();
     } catch (err) {
       this.error = mapError(err);
     } finally {

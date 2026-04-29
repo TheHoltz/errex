@@ -6,6 +6,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { admin } from './admin.svelte';
 import { api, HttpError, type AdminProject } from './api';
+import { projects } from './stores.svelte';
+import type { ProjectSummary } from './types';
 
 const sample: AdminProject = {
   name: 'demo',
@@ -24,6 +26,10 @@ beforeEach(() => {
   admin.projects = [];
   admin.error = null;
   admin.loading = false;
+  projects.available = [];
+  // Default stub so admin.loadProjects' role-neutral refresh doesn't throw
+  // in tests that only care about the admin half. Specific tests override.
+  vi.spyOn(api, 'projects').mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -54,6 +60,20 @@ describe('admin.loadProjects', () => {
     vi.spyOn(api.admin, 'listProjects').mockRejectedValue(new Error('boom'));
     await admin.loadProjects();
     expect(admin.error).toBe('network');
+  });
+
+  // Regression pin: post-onboarding bug where creating the first project
+  // updated `admin.projects` but left `projects.available` empty, so the
+  // first-run gate at routes/+page.svelte kept bouncing the operator back
+  // to /projects on every "View issues" click. Every admin mutation goes
+  // through loadProjects, so syncing here covers create/rename/delete/
+  // setWebhook/rotateToken in one place.
+  it('also refreshes projects.available so the role-neutral store stays in sync', async () => {
+    const summary: ProjectSummary = { project: 'demo', issue_count: 0 };
+    vi.spyOn(api.admin, 'listProjects').mockResolvedValue([sample]);
+    vi.spyOn(api, 'projects').mockResolvedValue([summary]);
+    await admin.loadProjects();
+    expect(projects.available).toEqual([summary]);
   });
 });
 
