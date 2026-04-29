@@ -25,7 +25,11 @@ tower-http = { workspace = true }
 rust-embed = { workspace = true }
 mime_guess = { workspace = true }
 
-reqwest = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+hyper-rustls = { workspace = true }
+http-body-util = { workspace = true }
+url = { workspace = true }
 
 sqlx = { workspace = true }
 
@@ -50,4 +54,3 @@ subtle = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 tower = { workspace = true }
-http-body-util = "0.1"

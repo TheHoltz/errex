@@ -6,17 +6,77 @@
 //! delivery is best-effort, not transactional. (If you need durable
 //! delivery, fan out to your own queue.)
 //!
-//! Lightweight: a single shared `reqwest::Client` (HTTP/2 keepalive, rustls
-//! TLS) and one task. No per-call allocations beyond the JSON body.
+//! Lightweight: a single shared hyper Client (HTTP/1, rustls + webpki-roots,
+//! ring crypto) and one task. No reqwest — the builder/multipart/cookie/
+//! redirect machinery was dead weight at idle for the fire-and-forget JSON
+//! POSTs we actually issue.
 
 use std::net::IpAddr;
 use std::time::Duration;
+
+use http_body_util::{BodyExt, Full};
+use hyper::body::Bytes;
+use hyper::{Method, Request};
+use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
+use url::Url;
 
 use errex_proto::{Issue, IssueStatus};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::store::Store;
+
+type WebhookClient = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
+
+fn build_client() -> WebhookClient {
+    let mut http = HttpConnector::new();
+    // Bound the TCP handshake — webhooks are not a load-bearing path,
+    // so a slow connect must not stall the task. Mirrors the prior
+    // `reqwest::ClientBuilder::connect_timeout(2s)`.
+    http.set_connect_timeout(Some(Duration::from_secs(2)));
+    http.enforce_http(false);
+
+    let https: HttpsConnector<HttpConnector> = HttpsConnectorBuilder::new()
+        .with_webpki_roots()
+        .https_or_http()
+        .enable_http1()
+        .wrap_connector(http);
+
+    Client::builder(TokioExecutor::new())
+        .pool_idle_timeout(Duration::from_secs(30))
+        .build(https)
+}
+
+/// Total per-call deadline, including DNS, TCP, TLS, and the response.
+/// Webhooks redirect to `https://hooks.slack.com/...` style endpoints
+/// where 10 s is generous; anything slower is failing somewhere.
+const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+
+async fn post_json(client: &WebhookClient, url: &str, body: &Value) -> Result<u16, String> {
+    let body_bytes = serde_json::to_vec(body).map_err(|e| format!("serialize body: {e}"))?;
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(url)
+        .header("content-type", "application/json")
+        .header("user-agent", concat!("errexd/", env!("CARGO_PKG_VERSION")))
+        .body(Full::new(Bytes::from(body_bytes)))
+        .map_err(|e| format!("build request: {e}"))?;
+
+    let send = client.request(req);
+    let resp = match tokio::time::timeout(SEND_TIMEOUT, send).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return Err(format!("send: {e}")),
+        Err(_) => return Err("timeout".into()),
+    };
+    let status = resp.status().as_u16();
+    // Drain the body so the connection can be reused. Best-effort —
+    // we don't surface body content anywhere.
+    let _ = resp.into_body().collect().await;
+    Ok(status)
+}
 
 /// Validate a configured webhook URL before storing it. The webhook task
 /// will POST to whatever lands here, so this is the SSRF gate: a hostile
@@ -38,7 +98,7 @@ use crate::store::Store;
 /// Mitigation belongs in the delivery path (custom resolver pinning the
 /// validated IP) — flagged for follow-up.
 pub fn validate_url(raw: &str) -> Result<(), &'static str> {
-    let url = reqwest::Url::parse(raw).map_err(|_| "invalid url")?;
+    let url = Url::parse(raw).map_err(|_| "invalid url")?;
     match url.scheme() {
         "http" | "https" => {}
         _ => return Err("scheme must be http or https"),
@@ -164,23 +224,11 @@ pub fn build_payload(t: &Trigger, public_url: &str) -> Value {
 /// Spawned task. Reads triggers, drops them silently for muted/ignored
 /// issues, looks up the project's webhook URL, fires the POST.
 pub async fn run(store: Store, public_url: String, mut rx: mpsc::Receiver<Trigger>) {
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .connect_timeout(Duration::from_secs(2))
-        // Reject upstream redirects: a 30x to an internal address would
-        // re-do SSRF that the configured-URL validator just refused.
-        // Webhooks are best-effort fire-and-forget; followers can update
-        // their endpoint instead of relying on us to chase 302s.
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent(concat!("errexd/", env!("CARGO_PKG_VERSION")))
-        .build()
-    {
-        Ok(c) => c,
-        Err(err) => {
-            tracing::error!(%err, "webhook: failed to build HTTP client; webhooks disabled");
-            return;
-        }
-    };
+    // Hyper Client does not follow redirects on its own — that matches the
+    // SSRF policy: a 30x pointing at an internal address would re-do the
+    // pivot the configured-URL validator just refused. Followers can update
+    // their endpoint instead of relying on us to chase 302s.
+    let client = build_client();
 
     tracing::info!("webhook task started");
     while let Some(trigger) = rx.recv().await {
@@ -206,20 +254,20 @@ pub async fn run(store: Store, public_url: String, mut rx: mpsc::Receiver<Trigge
         let Some(url) = url else { continue };
 
         let body = build_payload(&trigger, &public_url);
-        let res = client.post(&url).json(&body).send().await;
+        let res = post_json(&client, &url, &body).await;
         // Surface the most recent delivery outcome on the project row so the
         // /projects/[name] console can render "last delivery: 200 · 12s ago"
         // (or 404, or "never delivered") without a separate history table.
         // Status 0 is the "transport failure" sentinel — see the migration.
         let status_code = match &res {
-            Ok(r) => r.status().as_u16(),
+            Ok(code) => *code,
             Err(_) => 0,
         };
         store
             .record_webhook_attempt(&trigger.issue.project, status_code)
             .await;
         match res {
-            Ok(r) if r.status().is_success() => {
+            Ok(code) if (200..300).contains(&code) => {
                 tracing::info!(
                     project = %trigger.issue.project,
                     issue_id = trigger.issue.id,
@@ -227,16 +275,16 @@ pub async fn run(store: Store, public_url: String, mut rx: mpsc::Receiver<Trigge
                     "webhook delivered",
                 );
             }
-            Ok(r) => {
+            Ok(code) => {
                 tracing::warn!(
                     project = %trigger.issue.project,
                     issue_id = trigger.issue.id,
-                    status = %r.status(),
+                    status = code,
                     "webhook returned non-2xx",
                 );
             }
             Err(err) => {
-                tracing::warn!(%err, project = %trigger.issue.project, "webhook send failed");
+                tracing::warn!(err, project = %trigger.issue.project, "webhook send failed");
             }
         }
     }

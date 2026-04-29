@@ -30,9 +30,15 @@ hyper = "1"
 rust-embed = { version = "8", features = ["mime-guess", "interpolate-folder-path"] }
 mime_guess = "2"
 
-# Outbound webhook deliveries. Minimal reqwest: rustls-tls for HTTPS to
-# Slack/Discord/Teams without dragging in OpenSSL, plus the JSON helper.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# Outbound webhook deliveries. Hand-rolled hyper client instead of
+# reqwest — Slack/Discord/Teams webhooks are fire-and-forget JSON POSTs
+# and reqwest's builder/multipart/cookie/redirect machinery is dead
+# weight at idle. hyper + hyper-rustls (ring + webpki-roots) is what
+# reqwest reduces to once the unused features are stripped.
+hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "tokio", "http1"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "tls12", "webpki-tokio", "webpki-roots", "ring"] }
+http-body-util = "0.1"
+url = "2"
 
 # Storage
 sqlx = { version = "0.8", default-features = false, features = [
