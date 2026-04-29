@@ -59,25 +59,28 @@ COPY --from=web-builder /web/build /build/web/build
 RUN cargo build --release --bin errexd \
  && strip target/release/errexd
 
-# Stage out the user/group entries and the data dir into a scratch tree the
-# distroless runtime can COPY in (distroless has no shell, so we can't
-# `useradd` there). We use `--chown=1000:1000` on the COPYs so /data stays
-# writable to the runtime user.
+# Stage out the data dir into a scratch tree the distroless runtime can
+# COPY in (distroless has no shell, so we can't `mkdir` there).
 FROM debian:stable-slim AS rootfs
-RUN mkdir -p /pkg/data /pkg/home/errex \
- && echo 'errex:x:1000:1000::/home/errex:/sbin/nologin' > /pkg/passwd \
- && echo 'errex:x:1000:' > /pkg/group
+RUN mkdir -p /pkg/data /pkg/home
 
-# ---------- runtime: distroless cc, non-root, single static-ish binary ----------
+# ---------- runtime: distroless cc, single static-ish binary ----------
+#
+# We deliberately run as root (the distroless cc default). Reason: PaaS
+# providers (Railway, Fly, Render) attach persistent volumes owned by
+# root by default, and a non-root container would crash with EACCES on
+# the SQLite open. A tiny entrypoint that `chown`s and drops privileges
+# would solve it but distroless has no shell to run one. The attack
+# surface here is already minimal — distroless cc, single static-ish
+# binary, no package manager, no shell — so root buys portability with
+# no meaningful loss of isolation. The docker-compose path uses a named
+# volume (image owns the mount) so the same image works there too.
 FROM gcr.io/distroless/cc-debian12 AS runtime
-COPY --from=rootfs /pkg/passwd /etc/passwd
-COPY --from=rootfs /pkg/group /etc/group
-COPY --from=rootfs --chown=1000:1000 /pkg/home/errex /home/errex
-COPY --from=rootfs --chown=1000:1000 /pkg/data /data
+COPY --from=rootfs /pkg/home /home
+COPY --from=rootfs /pkg/data /data
 COPY --from=builder /build/target/release/errexd /usr/local/bin/errexd
 
-USER 1000
-WORKDIR /home/errex
+WORKDIR /home
 VOLUME ["/data"]
 EXPOSE 9090 9091 9092
 

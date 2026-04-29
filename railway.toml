@@ -21,3 +21,7 @@ healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
+# Refuse to deploy if no volume is attached at /data. SQLite lives there;
+# without persistence every redeploy silently wipes events, projects, and
+# users. Failing loud beats failing silently.
+requiredMountPath = "/data"
