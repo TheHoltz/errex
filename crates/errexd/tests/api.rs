@@ -708,6 +708,97 @@ async fn ingest_with_auth_required_rejects_unknown_project() {
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
 
+// ----- CORS -----
+
+#[tokio::test]
+async fn cors_preflight_on_envelope_returns_allow_origin() {
+    // Sentry SDKs run in customer browsers and POST envelopes from arbitrary
+    // origins to whatever host their DSN points at. The preflight must
+    // succeed regardless of origin — auth is via `sentry_key`, not Origin.
+    let (router, _store, _dir) = fixture().await;
+    let res = router
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/api/p/envelope/")
+                .header("origin", "https://example.com")
+                .header("access-control-request-method", "POST")
+                .header(
+                    "access-control-request-headers",
+                    "content-type,x-sentry-auth",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        res.status().is_success(),
+        "OPTIONS preflight must succeed, got {}",
+        res.status()
+    );
+    let acao = res
+        .headers()
+        .get("access-control-allow-origin")
+        .expect("preflight response must set Access-Control-Allow-Origin");
+    // Wildcard or echo are both valid — either lets the browser proceed.
+    let v = acao.to_str().unwrap();
+    assert!(v == "*" || v == "https://example.com", "got {v:?}");
+}
+
+#[tokio::test]
+async fn cors_post_envelope_includes_allow_origin() {
+    // The actual POST response also needs ACAO so the browser hands the
+    // response back to the SDK; without it, the fetch promise rejects
+    // with a CORS error even though the server already processed the body.
+    let (router, _store, _dir) = fixture().await;
+    let res = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/p/envelope/")
+                .header("origin", "https://example.com")
+                .body(sample_envelope_body())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let acao = res
+        .headers()
+        .get("access-control-allow-origin")
+        .expect("ingest response must set Access-Control-Allow-Origin");
+    let v = acao.to_str().unwrap();
+    assert!(v == "*" || v == "https://example.com", "got {v:?}");
+}
+
+#[tokio::test]
+async fn cors_not_applied_to_admin_routes() {
+    // Admin/auth routes are same-origin only. A wildcard ACAO here would
+    // let any site read responses from a logged-in operator's browser.
+    let (router, _store, _dir) = fixture().await;
+    let res = router
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/api/admin/projects")
+                .header("origin", "https://attacker.example")
+                .header("access-control-request-method", "GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    if let Some(acao) = res.headers().get("access-control-allow-origin") {
+        let v = acao.to_str().unwrap();
+        assert_ne!(v, "*", "admin routes must not return wildcard CORS");
+        assert_ne!(
+            v, "https://attacker.example",
+            "admin routes must not echo arbitrary origins"
+        );
+    }
+}
+
 // ----- rate limit -----
 
 #[tokio::test]

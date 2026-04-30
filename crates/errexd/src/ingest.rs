@@ -81,20 +81,39 @@ pub struct AppState {
 /// Build the API router without binding a listener. Extracted so tests can
 /// drive it via `tower::ServiceExt::oneshot` without spinning up a port.
 pub fn build_router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route("/health", get(health))
-        .route("/metrics", get(metrics))
-        // Cap raw envelope body at 1 MiB. Sentry events are typically
-        // <100 KiB; the legitimate p99 lives well under this. The
-        // dedicated cap protects the JSON parser and the gzip
-        // decompressor (the latter has its own 8 MiB cap on the
-        // *expanded* output — this layer guards the *compressed*
-        // input). Combined, an adversary cannot exhaust memory by
-        // pumping a single oversized request.
+    // The ingest endpoint is invoked by Sentry SDKs running in arbitrary
+    // browsers — by definition cross-origin from this daemon's host.
+    // Permit any origin: auth is the `sentry_key` query param /
+    // `x-sentry-auth` header, never the Origin. The wildcard is scoped
+    // to this single route via a dedicated sub-router so the admin/auth
+    // surface stays same-origin only. (Layering CORS directly on a
+    // `MethodRouter` alongside `DefaultBodyLimit` defeats axum's type
+    // inference on the chained-`Infallible` error path; merging a
+    // pre-layered sub-router is the cleanest way to keep both layers
+    // scoped to one route.)
+    //
+    // Cap raw envelope body at 1 MiB. Sentry events are typically
+    // <100 KiB; the legitimate p99 lives well under this. The dedicated
+    // cap protects the JSON parser and the gzip decompressor (the latter
+    // has its own 8 MiB cap on the *expanded* output — this layer guards
+    // the *compressed* input). Combined, an adversary cannot exhaust
+    // memory by pumping a single oversized request.
+    let envelope = Router::new()
         .route(
             "/api/:project/envelope/",
             post(ingest_envelope).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)),
         )
+        .layer(
+            CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods([Method::POST, Method::OPTIONS])
+                .allow_headers(tower_http::cors::Any),
+        );
+
+    Router::new()
+        .route("/health", get(health))
+        .route("/metrics", get(metrics))
+        .merge(envelope)
         .route("/api/projects", get(list_projects))
         .route("/api/issues", get(list_issues))
         .route("/api/issues/:id/event", get(latest_event))
@@ -246,8 +265,10 @@ pub async fn serve(addr: SocketAddr, state: Arc<AppState>) -> Result<(), DaemonE
 
     if dev_mode {
         // Permit the Vite dev server origin so `bun run dev` on :5173 can
-        // call the daemon directly without proxying. In production the SPA
-        // is served from this same origin and CORS is irrelevant.
+        // call the SPA's API surface (`/api/projects`, `/api/issues`, …)
+        // directly without proxying. The ingest envelope route already
+        // carries its own permissive CORS layer in `build_router` because
+        // SDKs always run cross-origin from the daemon, dev or prod.
         let cors = CorsLayer::new()
             .allow_origin(
                 "http://localhost:5173"
