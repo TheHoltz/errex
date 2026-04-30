@@ -45,6 +45,8 @@ mod rate_limit;
 mod spa;
 #[path = "../src/store.rs"]
 mod store;
+#[path = "../src/user_agent.rs"]
+mod user_agent;
 #[path = "../src/webhook.rs"]
 mod webhook;
 #[path = "../src/ws.rs"]

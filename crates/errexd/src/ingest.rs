@@ -1165,7 +1165,8 @@ fn parse_envelope(raw: &[u8]) -> Result<Vec<Event>, ProtoError> {
 
         let payload = &raw[cursor..payload_end];
         if item_type == "event" {
-            let event: Event = serde_json::from_slice(payload)?;
+            let mut event: Event = serde_json::from_slice(payload)?;
+            crate::user_agent::augment_tags_from_user_agent(&mut event);
             events.push(event);
         }
 

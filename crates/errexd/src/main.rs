@@ -25,6 +25,7 @@ mod retention;
 mod spa;
 mod store;
 mod triage;
+mod user_agent;
 mod webhook;
 mod ws;
 
