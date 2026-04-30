@@ -62,7 +62,13 @@ export interface ExceptionInfo {
 }
 
 export interface Breadcrumb {
-  timestamp?: string;
+  /**
+   * Sentry's wire format allows two shapes here: an ISO-8601 string (the
+   * spec'd canonical form) and a numeric Unix epoch in seconds (what most
+   * JS SDKs actually emit, sometimes with sub-second precision). errex
+   * preserves whichever the SDK sent — render-side helpers normalize.
+   */
+  timestamp?: string | number | null;
   category?: string | null;
   level?: IssueLevel | null;
   message?: string | null;

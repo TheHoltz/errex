@@ -85,18 +85,46 @@ export function dedupTags(tags: Record<string, string>): Record<string, string> 
 }
 
 /**
+ * Coerce a Sentry timestamp to milliseconds-since-epoch.
+ *
+ * Sentry SDKs are inconsistent: the spec asks for ISO-8601 strings, but
+ * most JS SDKs ship Unix epoch *seconds* (often as a float with sub-second
+ * precision). Older Python integrations emit ISO strings; some custom
+ * forwarders emit milliseconds. We accept all three forms — falling back
+ * to NaN for anything else so callers can render the em-dash placeholder.
+ */
+export function parseSentryTimestamp(ts: string | number | null | undefined): number {
+  if (ts === null || ts === undefined) return Number.NaN;
+  if (typeof ts === 'number') {
+    if (!Number.isFinite(ts)) return Number.NaN;
+    // Heuristic: anything below ~10^12 is seconds-since-epoch (year 33658
+    // in milliseconds is the cutoff; year 2001 in seconds is 10^9). Above
+    // that, treat as already-milliseconds.
+    return ts < 1e12 ? ts * 1000 : ts;
+  }
+  // Numeric strings ("1729012345.678") slip in from a few SDKs that
+  // stringify the Unix-seconds float. Date.parse returns NaN on those, so
+  // try parseFloat first when the input has no separator that ISO needs.
+  if (!ts.includes('-') && !ts.includes('T') && !ts.includes(':')) {
+    const n = Number.parseFloat(ts);
+    if (Number.isFinite(n)) return n < 1e12 ? n * 1000 : n;
+  }
+  const ms = Date.parse(ts);
+  return Number.isFinite(ms) ? ms : Number.NaN;
+}
+
+/**
  * Format a breadcrumb timestamp as a delta against the crash event so the
  * user reads "-42s" instead of doing wall-clock math against an absolute
  * `01:18:49.203`. T-0 is reserved for the breadcrumb that lands on the
  * crash itself; positive deltas (rare — usually clock skew) get a `+`.
  */
 export function breadcrumbRelativeTime(
-  crashTs: string,
-  bcTs: string | null | undefined
+  crashTs: string | number | null | undefined,
+  bcTs: string | number | null | undefined
 ): string {
-  if (!bcTs) return '—';
-  const crash = Date.parse(crashTs);
-  const bc = Date.parse(bcTs);
+  const crash = parseSentryTimestamp(crashTs);
+  const bc = parseSentryTimestamp(bcTs);
   if (!Number.isFinite(crash) || !Number.isFinite(bc)) return '—';
   const deltaMs = bc - crash;
   if (deltaMs === 0) return 'T-0';

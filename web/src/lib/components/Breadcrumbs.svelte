@@ -2,7 +2,7 @@
   import { Footprints } from 'lucide-svelte';
   import { Badge } from '$lib/components/ui/badge';
   import { Collapsible } from '$lib/components/ui/collapsible';
-  import { breadcrumbRelativeTime } from '$lib/eventDetail';
+  import { breadcrumbRelativeTime, parseSentryTimestamp } from '$lib/eventDetail';
   import type { Breadcrumb } from '$lib/types';
   import { cn } from '$lib/utils';
 
@@ -14,15 +14,17 @@
   // Anchor index: the breadcrumb closest to (and ≤) the crash timestamp.
   // That row is the "last thing the user did before it broke", which we
   // subtly highlight so the eye lands on it without hunting.
+  // Sentry JS SDKs emit timestamps as Unix-seconds floats (not ISO
+  // strings), so route both through `parseSentryTimestamp` rather than
+  // bare `Date.parse` — see eventDetail.ts.
   const anchorIndex = $derived.by(() => {
     if (!crashTimestamp || breadcrumbs.length === 0) return -1;
-    const crash = Date.parse(crashTimestamp);
+    const crash = parseSentryTimestamp(crashTimestamp);
     if (!Number.isFinite(crash)) return -1;
     let best = -1;
     let bestDelta = Number.POSITIVE_INFINITY;
     breadcrumbs.forEach((bc, i) => {
-      if (!bc.timestamp) return;
-      const t = Date.parse(bc.timestamp);
+      const t = parseSentryTimestamp(bc.timestamp);
       if (!Number.isFinite(t) || t > crash) return;
       const d = crash - t;
       if (d < bestDelta) {

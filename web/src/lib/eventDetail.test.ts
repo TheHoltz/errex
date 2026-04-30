@@ -58,6 +58,35 @@ describe('breadcrumbRelativeTime', () => {
   it('handles breadcrumbs after the crash with positive prefix', () => {
     expect(breadcrumbRelativeTime(crash, '2026-04-27T04:19:33.000Z')).toBe('+2s');
   });
+
+  it('accepts Unix-seconds floats from JS SDKs (the in-the-wild format)', () => {
+    // Sentry JS SDK ships breadcrumb.timestamp as a numeric float in
+    // seconds, NOT an ISO string — every screenshot of "—" in the
+    // breadcrumb table came from Date.parse silently returning NaN on
+    // these inputs.
+    const crashEpoch = Date.parse(crash) / 1000;
+    expect(breadcrumbRelativeTime(crashEpoch, crashEpoch - 42)).toBe('-42s');
+    expect(breadcrumbRelativeTime(crashEpoch, crashEpoch + 2)).toBe('+2s');
+    expect(breadcrumbRelativeTime(crashEpoch, crashEpoch)).toBe('T-0');
+  });
+
+  it('mixes formats: ISO crash + numeric breadcrumb (or vice versa)', () => {
+    const crashEpoch = Date.parse(crash) / 1000;
+    expect(breadcrumbRelativeTime(crash, crashEpoch - 42)).toBe('-42s');
+    expect(breadcrumbRelativeTime(crashEpoch, '2026-04-27T04:18:49.000Z')).toBe('-42s');
+  });
+
+  it('accepts numeric strings (some custom forwarders stringify the float)', () => {
+    const crashEpoch = String(Date.parse(crash) / 1000);
+    const bcEpoch = String(Date.parse(crash) / 1000 - 42);
+    expect(breadcrumbRelativeTime(crashEpoch, bcEpoch)).toBe('-42s');
+    expect(breadcrumbRelativeTime(`${crashEpoch}.5`, `${bcEpoch}.5`)).toBe('-42s');
+  });
+
+  it('accepts millisecond-scale numbers (Date.now() shape)', () => {
+    const crashMs = Date.parse(crash);
+    expect(breadcrumbRelativeTime(crashMs, crashMs - 42_000)).toBe('-42s');
+  });
 });
 
 describe('partitionFrames', () => {
