@@ -51,7 +51,10 @@ pub struct Event {
     #[serde(default = "Uuid::new_v4")]
     pub event_id: Uuid,
 
-    #[serde(default = "Utc::now", deserialize_with = "deserialize_sentry_timestamp")]
+    #[serde(
+        default = "Utc::now",
+        deserialize_with = "deserialize_sentry_timestamp"
+    )]
     pub timestamp: DateTime<Utc>,
 
     #[serde(default)]
