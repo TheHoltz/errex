@@ -39,6 +39,34 @@ fn event_deserializes_minimal_payload() {
 }
 
 #[test]
+fn event_deserializes_unix_float_timestamp() {
+    // Real Sentry SDKs (browser, Node) send `timestamp` as a Unix epoch
+    // float in seconds, not an ISO 8601 string. The browser SDK's
+    // captureException output includes e.g. `"timestamp": 1777569685.844`.
+    // The default chrono DateTime<Utc> deserializer only accepts strings,
+    // which silently fails the whole envelope at ingest with HTTP 400.
+    let raw = json!({
+        "timestamp": 1777569685.844_f64,
+        "exception": { "values": [{ "type": "Error", "value": "boom" }] },
+    });
+    let ev: Event = serde_json::from_value(raw).expect("float unix timestamp must parse");
+    // 1777569685 = 2026-04-30 17:21:25 UTC; assert seconds match so we know
+    // the conversion is using seconds, not milliseconds.
+    assert_eq!(ev.timestamp.timestamp(), 1777569685);
+}
+
+#[test]
+fn event_deserializes_unix_int_timestamp() {
+    // Some SDKs round to integer seconds.
+    let raw = json!({
+        "timestamp": 1777569685_u64,
+        "exception": { "values": [{ "type": "Error", "value": "boom" }] },
+    });
+    let ev: Event = serde_json::from_value(raw).expect("int unix timestamp must parse");
+    assert_eq!(ev.timestamp.timestamp(), 1777569685);
+}
+
+#[test]
 fn event_deserializes_full_payload() {
     let raw = json!({
         "event_id": "11111111111111111111111111111111",

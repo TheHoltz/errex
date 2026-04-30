@@ -1,7 +1,44 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
+
+/// Sentry SDKs send `timestamp` either as an RFC 3339 string or as a Unix
+/// epoch number in seconds (integer or float, sub-second precision). The
+/// default chrono deserializer only accepts the string form, which silently
+/// 400s every error envelope from the browser SDK. Accept both shapes here.
+fn deserialize_sentry_timestamp<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    match Value::deserialize(deserializer)? {
+        Value::String(s) => DateTime::parse_from_rfc3339(&s)
+            .map(|d| d.with_timezone(&Utc))
+            .map_err(D::Error::custom),
+        Value::Number(n) => {
+            let secs_f = n
+                .as_f64()
+                .ok_or_else(|| D::Error::custom("non-finite timestamp number"))?;
+            let whole = secs_f.trunc() as i64;
+            let frac = secs_f - secs_f.trunc();
+            let nanos = (frac * 1_000_000_000.0).round().clamp(0.0, 999_999_999.0) as u32;
+            DateTime::from_timestamp(whole, nanos)
+                .ok_or_else(|| D::Error::custom("timestamp out of range"))
+        }
+        other => Err(D::Error::custom(format!(
+            "expected string or number for timestamp, got {}",
+            match other {
+                Value::Null => "null",
+                Value::Bool(_) => "bool",
+                Value::Array(_) => "array",
+                Value::Object(_) => "object",
+                _ => "unknown",
+            }
+        ))),
+    }
+}
 
 /// A single error event coming from a Sentry-compatible SDK.
 ///
@@ -14,7 +51,7 @@ pub struct Event {
     #[serde(default = "Uuid::new_v4")]
     pub event_id: Uuid,
 
-    #[serde(default = "Utc::now")]
+    #[serde(default = "Utc::now", deserialize_with = "deserialize_sentry_timestamp")]
     pub timestamp: DateTime<Utc>,
 
     #[serde(default)]
