@@ -37,7 +37,7 @@ export type ClientMessage = { type: 'ping' };
 export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
 /** Issue list ordering. Mirrored as a URL token in lib/filterUrl.ts. */
-export type SortKey = 'recent' | 'stale' | 'count' | 'created' | 'oldest';
+export type SortKey = 'recent' | 'stale' | 'count';
 
 // ----- Event detail -----
 //

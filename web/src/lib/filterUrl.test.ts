@@ -152,11 +152,29 @@ describe('parseFilterParams', () => {
     expect(p.has('spike')).toBe(false);
   });
 
-  it('parses recognised since presets only (1h, 24h, 7d)', () => {
+  it('parses recognised since presets only (5m, 15m, 1h, 24h, 7d)', () => {
+    expect(parseFilterParams(new URLSearchParams('since=5m')).sinceMs).toBe(5 * 60 * 1000);
+    expect(parseFilterParams(new URLSearchParams('since=15m')).sinceMs).toBe(15 * 60 * 1000);
     expect(parseFilterParams(new URLSearchParams('since=1h')).sinceMs).toBe(60 * 60 * 1000);
     expect(parseFilterParams(new URLSearchParams('since=24h')).sinceMs).toBe(24 * 60 * 60 * 1000);
     expect(parseFilterParams(new URLSearchParams('since=7d')).sinceMs).toBe(7 * 24 * 60 * 60 * 1000);
     expect(parseFilterParams(new URLSearchParams('since=bogus')).sinceMs).toBeNull();
+    expect(parseFilterParams(new URLSearchParams('since=10m')).sinceMs).toBeNull();
+  });
+
+  it('round-trips since=5m and since=15m', () => {
+    for (const [token, ms] of [['5m', 5 * 60 * 1000], ['15m', 15 * 60 * 1000]] as const) {
+      const params = serializeFilterParams({
+        query: '',
+        statuses: new Set(['unresolved']),
+        levels: new Set(),
+        sinceMs: ms,
+        spikingOnly: false,
+        sort: 'recent'
+      });
+      expect(params.get('since')).toBe(token);
+      expect(parseFilterParams(params).sinceMs).toBe(ms);
+    }
   });
 
   it('parses spike=1 as true; anything else as false', () => {

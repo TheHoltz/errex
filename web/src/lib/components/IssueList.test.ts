@@ -8,10 +8,13 @@ import IssueListWrapper from './IssueListWrapper.svelte';
 // IssueList.svelte requires a Tooltip.Provider ancestor (wired in the app
 // layout). IssueListWrapper provides that context so the component can be
 // exercised in the jsdom environment without the full SvelteKit layout.
+//
+// The toolbar is now a single UnifiedInput; the legacy sort menu, filter
+// popover, and regex-mode tag are gone. Tests here cover the readout row
+// and smoke-render rather than the input internals — those are exercised
+// in queryParser.test.ts and queryBridge.test.ts at the unit level.
 
 beforeEach(() => {
-  // Reset the URL so the onMount in IssueList.svelte does not re-hydrate
-  // stale filter params written by a previous test's $effect.
   history.replaceState(null, '', '/');
   issues.reset([]);
   filter.query = '';
@@ -20,6 +23,9 @@ beforeEach(() => {
   filter.sinceMs = null;
   filter.spikingOnly = false;
   filter.sort = 'recent';
+  filter.newOnly = false;
+  filter.staleOnly = false;
+  filter.limit = null;
   projects.current = 'p';
   load.initialLoad = false;
 });
@@ -28,87 +34,34 @@ afterEach(() => {
   issues.reset([]);
 });
 
-describe('IssueList regex tag', () => {
-  it('shows the / kbd hint when query is empty', () => {
+describe('IssueList toolbar', () => {
+  it('renders the unified input with the placeholder', () => {
+    render(IssueListWrapper);
+    expect(screen.getByLabelText('Filter issues')).toBeInTheDocument();
+  });
+
+  it('shows the `/` kbd hint when the input is empty', () => {
     render(IssueListWrapper);
     expect(screen.getByText('/')).toBeInTheDocument();
-    expect(screen.queryByTestId('query-mode-tag')).toBeNull();
-  });
-
-  it('shows an amber "regex" tag when query starts with a valid /pattern', async () => {
-    render(IssueListWrapper);
-    flushSync(() => {
-      filter.query = '/Error.*/';
-    });
-    const tag = await screen.findByTestId('query-mode-tag');
-    expect(tag).toHaveTextContent('regex');
-    expect(tag.className).toMatch(/text-amber-500/);
-  });
-
-  it('shows a destructive red "regex" tag when query is invalid', async () => {
-    render(IssueListWrapper);
-    flushSync(() => {
-      filter.query = '/Error[';
-    });
-    const tag = await screen.findByTestId('query-mode-tag');
-    expect(tag).toHaveTextContent('regex');
-    expect(tag.className).toMatch(/text-destructive/);
-  });
-
-  it('hides the kbd hint and tag when in substring mode with text', async () => {
-    render(IssueListWrapper);
-    flushSync(() => {
-      filter.query = 'auth';
-    });
-    expect(screen.queryByTestId('query-mode-tag')).toBeNull();
-    // The clear button takes the right slot at this point; the kbd is gone too.
-    expect(screen.queryByText('/')).toBeNull();
-  });
-});
-
-describe('IssueList sort menu', () => {
-  it('renders the sort button with no label (icon-only)', () => {
-    render(IssueListWrapper);
-    const btn = screen.getByRole('button', { name: /sort/i });
-    expect(btn.textContent?.trim()).toBe('');
-  });
-
-  // The popover-driven click path can't be exercised in jsdom: bits-ui's
-  // floating-ui positioning needs a real layout engine, so Popover.Content
-  // never mounts and the menuitems aren't queryable. The active-class test
-  // below covers the component's reaction to sort changes; the click → store
-  // binding is verified manually in the smoke check (scripts/dev.sh).
-  it('sort button gets an active ring class when sort is non-default', () => {
-    render(IssueListWrapper);
-    const btn = screen.getByRole('button', { name: /sort/i });
-    expect(btn.className).not.toMatch(/bg-foreground\/10/);
-
-    // flushSync forces Svelte to apply the reactive class update synchronously
-    // so we can assert the new className without awaiting a tick.
-    flushSync(() => {
-      filter.sort = 'count';
-    });
-    expect(btn.className).toMatch(/bg-foreground\/10/);
-    expect(btn.className).toMatch(/ring-1/);
   });
 });
 
 describe('IssueList active-filter readout', () => {
-  it('labels the query "query:" when it is plain substring text', async () => {
+  it('does not render the readout row when filter is at defaults', () => {
     render(IssueListWrapper);
+    // "Clear all" is the unique affordance on the readout row; its
+    // presence is a reliable proxy for the row being mounted.
+    expect(screen.queryByText('Clear all')).toBeNull();
+  });
+
+  it('shows the readout with "N of N" when filter.query is non-empty', async () => {
+    render(IssueListWrapper);
+    // We seed the filter via the store rather than typing into the
+    // input — exercising the input's keystroke pipeline requires the
+    // parser+bridge round-trip which is unit-tested elsewhere.
     flushSync(() => {
       filter.query = 'auth';
     });
-    expect(await screen.findByText(/query:/)).toBeInTheDocument();
-    expect(screen.queryByText(/regex:/)).toBeNull();
-  });
-
-  it('labels the query "regex:" when in regex mode', async () => {
-    render(IssueListWrapper);
-    flushSync(() => {
-      filter.query = '/Error.*/';
-    });
-    expect(await screen.findByText(/regex:/)).toBeInTheDocument();
-    expect(screen.queryByText(/query:/)).toBeNull();
+    expect(await screen.findByText('Clear all')).toBeInTheDocument();
   });
 });

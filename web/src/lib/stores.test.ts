@@ -256,18 +256,6 @@ describe('visibleIssues + sort', () => {
     expect(visibleIssues().map((i) => i.id)).toEqual([2, 4, 1, 3]);
   });
 
-  it('sort=created orders by first_seen DESC', () => {
-    fixture();
-    filter.sort = 'created';
-    expect(visibleIssues().map((i) => i.id)).toEqual([4, 3, 2, 1]);
-  });
-
-  it('sort=oldest orders by first_seen ASC', () => {
-    fixture();
-    filter.sort = 'oldest';
-    expect(visibleIssues().map((i) => i.id)).toEqual([1, 2, 3, 4]);
-  });
-
   it('breaks ties on id ASC for determinism', () => {
     issues.reset([
       issue({ id: 9, event_count: 5, last_seen: '2026-01-01T00:00:00Z' }),

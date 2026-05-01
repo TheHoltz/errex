@@ -11,16 +11,21 @@ export interface FilterState {
   sinceMs: number | null;
   spikingOnly: boolean;
   sort: SortKey;
+  /** Maximum number of issues to surface; null = no cap. Driven by `top N`
+   *  / `limit:N` tokens in the unified input. */
+  limit?: number | null;
 }
 
 const ALL_STATUSES: IssueStatus[] = ['unresolved', 'resolved', 'muted', 'ignored'];
 const ALL_LEVELS: IssueLevel[] = ['debug', 'info', 'warning', 'error', 'fatal'];
-export const ALL_SORTS: SortKey[] = ['recent', 'stale', 'count', 'created', 'oldest'];
+export const ALL_SORTS: SortKey[] = ['recent', 'stale', 'count'];
 
 // Whitelisted "since" presets. Keeping the URL token symbolic (1h/24h/7d)
 // rather than raw milliseconds means a stale share link can't smuggle in
 // an arbitrary window, and the encoded URL stays human-readable.
 const SINCE_PRESETS: Record<string, number> = {
+  '5m': 5 * 60 * 1000,
+  '15m': 15 * 60 * 1000,
   '1h': 60 * 60 * 1000,
   '24h': 24 * 60 * 60 * 1000,
   '7d': 7 * 24 * 60 * 60 * 1000
@@ -52,6 +57,9 @@ export function serializeFilterParams(f: FilterState): URLSearchParams {
   }
   if (f.spikingOnly) p.set('spike', '1');
   if (f.sort !== 'recent') p.set('sort', f.sort);
+  // Limit is small-integer-only (1..10000). We cap on parse so a stale
+  // share link can't pin a million-row scan onto the client.
+  if (f.limit != null && f.limit > 0) p.set('limit', String(f.limit));
   return p;
 }
 
@@ -96,5 +104,12 @@ export function parseFilterParams(p: URLSearchParams): FilterState {
       ? (sortRaw as SortKey)
       : 'recent';
 
-  return { query, statuses, levels, sinceMs, spikingOnly, sort };
+  const limitRaw = p.get('limit');
+  let limit: number | null = null;
+  if (limitRaw != null) {
+    const n = parseInt(limitRaw, 10);
+    if (Number.isFinite(n) && n > 0 && n <= 10000) limit = n;
+  }
+
+  return { query, statuses, levels, sinceMs, spikingOnly, sort, limit };
 }

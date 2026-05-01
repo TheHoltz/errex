@@ -1,32 +1,16 @@
 <script lang="ts">
-  import {
-    ArrowUpDown,
-    Ban,
-    BellOff,
-    Check,
-    Circle,
-    Search,
-    ShieldCheck,
-    SlidersHorizontal,
-    X
-  } from 'lucide-svelte';
-  import { onMount } from 'svelte';
+  import { ShieldCheck } from 'lucide-svelte';
+  import { onMount, untrack } from 'svelte';
   import { browser } from '$app/environment';
-  import { Badge } from '$lib/components/ui/badge';
   import { Button } from '$lib/components/ui/button';
-  import { Checkbox } from '$lib/components/ui/checkbox';
-  import { Input } from '$lib/components/ui/input';
-  import { Label } from '$lib/components/ui/label';
-  import * as Popover from '$lib/components/ui/popover';
-  import { Separator } from '$lib/components/ui/separator';
   import { Skeleton } from '$lib/components/ui/skeleton';
-  import * as Tooltip from '$lib/components/ui/tooltip';
   import { eventStream } from '$lib/eventStream.svelte';
   import { parseFilterParams, serializeFilterParams } from '$lib/filterUrl';
-  import { filter, issues, load, parseQuery, projects, selection, visibleIssues } from '$lib/stores.svelte';
-  import type { IssueLevel, IssueStatus, SortKey } from '$lib/types';
-  import { cn } from '$lib/utils';
+  import { applyInputToFilter, filterToQueryString } from '$lib/queryBridge';
+  import { filter, issues, load, projects, selection, visibleIssues } from '$lib/stores.svelte';
+  import type { IssueLevel, IssueStatus } from '$lib/types';
   import IssueRow from './IssueRow.svelte';
+  import UnifiedInput from './UnifiedInput.svelte';
 
   type Props = {
     onSelect?: (id: number) => void;
@@ -34,14 +18,10 @@
   };
   let { onSelect, filterRef }: Props = $props();
 
-  let inputEl = $state<HTMLInputElement | null>(null);
-  $effect(() => {
-    if (filterRef && inputEl) filterRef.current = inputEl;
-  });
-
+  // ─── URL hydration & sync ────────────────────────────────────────────
   // Hydrate filter state from URL once on mount. Subsequent changes flow
-  // the other direction via the effect below; the two never both write in
-  // the same tick because hydration is synchronous before the first
+  // the other direction via the effect below; the two never both write
+  // in the same tick because hydration is synchronous before the first
   // effect run.
   onMount(() => {
     if (!browser) return;
@@ -52,11 +32,13 @@
     filter.sinceMs = next.sinceMs;
     filter.spikingOnly = next.spikingOnly;
     filter.sort = next.sort;
+    filter.limit = next.limit ?? null;
   });
 
-  // Push filter state into the URL so the active filter is reload-safe and
-  // shareable. We use replaceState (not goto) to avoid polluting browser
-  // history on every keystroke and to skip SvelteKit's data revalidation.
+  // Push filter state into the URL so the active filter is reload-safe
+  // and shareable. We use replaceState (not goto) to avoid polluting
+  // browser history on every keystroke and to skip SvelteKit's data
+  // revalidation.
   $effect(() => {
     if (!browser) return;
     const params = serializeFilterParams({
@@ -65,7 +47,8 @@
       levels: filter.levels,
       sinceMs: filter.sinceMs,
       spikingOnly: filter.spikingOnly,
-      sort: filter.sort
+      sort: filter.sort,
+      limit: filter.limit
     });
     const search = params.toString();
     const target = location.pathname + (search ? `?${search}` : '') + location.hash;
@@ -74,40 +57,55 @@
     }
   });
 
-  // Re-evaluate when the 5 s tick advances so the since/spiking filters
-  // stay current without each consumer wiring its own setInterval.
+  // ─── Unified-input ↔ filter store bridge ─────────────────────────────
+  //
+  // The input owns its own text state; on every change it parses + writes
+  // to the discrete filter fields. A reverse effect regenerates the
+  // input's text whenever an external mutator changes the filter
+  // (e.g. HeaderStats's 1H chip), so the input never lies about state.
+  // Loops are avoided by short-circuiting when the canonical form
+  // already matches the current input value.
+  let inputValue = $state(filterToQueryString(filter));
+
+  $effect(() => {
+    // Apply parser → filter store on user input.
+    const v = inputValue;
+    untrack(() => applyInputToFilter(v, filter));
+  });
+
+  $effect(() => {
+    // Regenerate input when filter changes externally. Reading every
+    // field tracks all dependencies; we then compare against the
+    // current inputValue (untracked) to decide whether to update.
+    void filter.statuses;
+    void filter.levels;
+    void filter.sinceMs;
+    void filter.spikingOnly;
+    void filter.sort;
+    void filter.newOnly;
+    void filter.staleOnly;
+    void filter.limit;
+    void filter.query;
+    const fromFilter = filterToQueryString(filter);
+    untrack(() => {
+      if (fromFilter !== inputValue) inputValue = fromFilter;
+    });
+  });
+
+  // expose the input element for keyboard shortcuts (`/` to focus).
+  let unifiedRef: { focus: () => void } | undefined = $state();
+  let inputEl: HTMLInputElement | null = $state(null);
+  $effect(() => {
+    if (filterRef && inputEl) filterRef.current = inputEl;
+  });
+
+  // ─── Visible list + readout ──────────────────────────────────────────
   const visible = $derived.by(() => {
     void eventStream.tick;
     return visibleIssues({
       isSpiking: (id: number) => eventStream.isSpiking(id)
     });
   });
-
-  type StatusChip = {
-    key: IssueStatus;
-    label: string;
-    Icon: typeof Circle;
-    activeClass: string;
-  };
-
-  const statusChips: StatusChip[] = [
-    { key: 'unresolved', label: 'Unresolved', Icon: Circle, activeClass: 'bg-foreground/10 text-foreground ring-1 ring-foreground/30' },
-    { key: 'resolved',   label: 'Resolved',   Icon: Check,  activeClass: 'bg-emerald-500/15 text-emerald-500 ring-1 ring-emerald-500/40' },
-    { key: 'muted',      label: 'Muted',      Icon: BellOff, activeClass: 'bg-amber-500/15 text-amber-500 ring-1 ring-amber-500/40' },
-    { key: 'ignored',    label: 'Ignored',    Icon: Ban,    activeClass: 'bg-muted text-muted-foreground ring-1 ring-border' }
-  ];
-
-  const allLevels: IssueLevel[] = ['fatal', 'error', 'warning', 'info', 'debug'];
-
-  function statusCount(s: IssueStatus): number {
-    return issues.list.filter((i) => i.project === projects.current && i.status === s).length;
-  }
-
-  function levelCount(l: IssueLevel): number {
-    return issues.list.filter(
-      (i) => i.project === projects.current && (i.level?.toLowerCase() ?? '') === l
-    ).length;
-  }
 
   const projectTotal = $derived(
     issues.list.filter((i) => i.project === projects.current).length
@@ -123,307 +121,60 @@
     return `All quiet · last event ${Math.floor(minutes / 60)} h ago.`;
   });
 
-  const hasActiveFilter = $derived(
-    filter.query.trim().length > 0 ||
-      filter.statuses.size !== 1 ||
-      !filter.statuses.has('unresolved') ||
-      filter.levels.size > 0 ||
-      filter.sinceMs != null ||
-      filter.spikingOnly ||
-      filter.sort !== 'recent'
-  );
+  const hasActiveFilter = $derived(inputValue.trim().length > 0);
 
-  const queryMode = $derived(parseQuery(filter.query).mode);
-
-  function sinceLabel(ms: number): string {
-    if (ms === 60 * 60 * 1000) return '1h';
-    if (ms === 24 * 60 * 60 * 1000) return '24h';
-    if (ms === 7 * 24 * 60 * 60 * 1000) return '7d';
-    return `${Math.round(ms / 60000)}m`;
-  }
-
-  // Stable, human-readable order for the readout: matches the chip row.
-  const STATUS_ORDER: IssueStatus[] = ['unresolved', 'resolved', 'muted', 'ignored'];
-  const LEVEL_ORDER: IssueLevel[] = ['fatal', 'error', 'warning', 'info', 'debug'];
-
-  const SORT_OPTIONS: { key: SortKey; label: string; hint: string }[] = [
-    { key: 'recent',  label: 'Newest activity',  hint: 'last seen ↓'  },
-    { key: 'stale',   label: 'Oldest activity',  hint: 'last seen ↑'  },
-    { key: 'count',   label: 'Most frequent',    hint: 'count ↓'      },
-    { key: 'created', label: 'Recently created', hint: 'first seen ↓' },
-    { key: 'oldest',  label: 'Longest open',     hint: 'first seen ↑' }
-  ];
-
-  const sortLabel = $derived(
-    SORT_OPTIONS.find((o) => o.key === filter.sort)?.label ?? 'Newest activity'
-  );
-
-  const statusReadout = $derived(
-    STATUS_ORDER.filter((s) => filter.statuses.has(s)).join(' + ')
-  );
-  const levelReadout = $derived(
-    LEVEL_ORDER.filter((l) => filter.levels.has(l)).join(', ')
-  );
-
-  let sortOpen = $state(false);
+  // Sparkline of matching issues over the last 60 minutes — passed to
+  // the input so the suggestion panel's match-preview can render the
+  // density of results without computing it twice.
+  const sparkline = $derived.by(() => {
+    void eventStream.tick;
+    const SLOTS = 60;
+    const now = Date.now();
+    const window = 60 * 60 * 1000;
+    const start = now - window;
+    const bucketMs = window / SLOTS;
+    const out = new Array<number>(SLOTS).fill(0);
+    for (const i of visible) {
+      const t = Date.parse(i.first_seen);
+      if (!Number.isFinite(t) || t < start) continue;
+      const idx = Math.min(SLOTS - 1, Math.floor((t - start) / bucketMs));
+      out[idx] = (out[idx] ?? 0) + 1;
+    }
+    return out;
+  });
 
   function clearFilters() {
+    inputValue = '';
     filter.query = '';
     filter.statuses = new Set<IssueStatus>(['unresolved']);
     filter.levels = new Set<IssueLevel>();
     filter.sinceMs = null;
     filter.spikingOnly = false;
     filter.sort = 'recent';
+    filter.newOnly = false;
+    filter.staleOnly = false;
+    filter.limit = null;
   }
 </script>
 
 <div class="flex h-full flex-col">
-  <div class="flex items-center gap-2 border-b border-border px-3 py-2">
-    <div class="relative flex-1">
-      <Search class="text-muted-foreground absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2" />
-      <Input
-        bind:ref={inputEl}
-        bind:value={filter.query}
-        placeholder="filter"
-        class="h-9 pl-8 pr-16 text-[13px]"
-      />
-      {#if filter.query.length > 0}
-        {#if queryMode === 'regex' || queryMode === 'badRegex'}
-          <Tooltip.Root>
-            <Tooltip.Trigger>
-              {#snippet child({ props })}
-                <span
-                  {...props}
-                  data-testid="query-mode-tag"
-                  class={cn(
-                    'absolute right-9 top-1/2 -translate-y-1/2 rounded border px-1.5 py-0.5 font-mono text-[10px]',
-                    queryMode === 'regex'
-                      ? 'text-amber-500 border-amber-500/40 bg-amber-500/10'
-                      : 'text-destructive border-destructive/50 bg-destructive/10'
-                  )}
-                  aria-label={queryMode === 'regex' ? 'Regex mode' : 'Invalid regex'}
-                >
-                  regex
-                </span>
-              {/snippet}
-            </Tooltip.Trigger>
-            <Tooltip.Content>
-              {queryMode === 'regex'
-                ? 'Regex mode (case-insensitive). Press Esc to clear.'
-                : 'Invalid regex — falling back to literal substring search.'}
-            </Tooltip.Content>
-          </Tooltip.Root>
-        {/if}
-        <Button
-          variant="ghost"
-          size="icon"
-          class="absolute right-1 top-1/2 h-6 w-6 -translate-y-1/2 text-muted-foreground"
-          aria-label="Clear filter query"
-          onclick={() => (filter.query = '')}
-        >
-          <X class="h-3.5 w-3.5" />
-        </Button>
-      {:else}
-        <kbd
-          class="border-border text-muted-foreground absolute right-2 top-1/2 -translate-y-1/2 rounded border px-1.5 py-0.5 font-mono text-[10px]"
-          aria-hidden="true"
-        >
-          /
-        </kbd>
-      {/if}
-    </div>
-
-    <div class="flex items-center gap-1">
-      {#each statusChips as chip (chip.key)}
-        {@const on = filter.statuses.has(chip.key)}
-        {@const count = statusCount(chip.key)}
-        {@const empty = count === 0 && !on}
-        <Tooltip.Root>
-          <Tooltip.Trigger>
-            {#snippet child({ props })}
-              <Button
-                {...props}
-                variant="ghost"
-                size="sm"
-                onclick={() => filter.toggleStatus(chip.key)}
-                aria-pressed={on}
-                aria-label={chip.label}
-                class={cn(
-                  'h-9 gap-1.5 px-2 tabular-nums',
-                  on
-                    ? chip.activeClass
-                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/50',
-                  empty && 'opacity-40'
-                )}
-              >
-                <chip.Icon class="h-4 w-4" />
-                <span class="text-[12px]">{count}</span>
-              </Button>
-            {/snippet}
-          </Tooltip.Trigger>
-          <Tooltip.Content>{chip.label}</Tooltip.Content>
-        </Tooltip.Root>
-      {/each}
-
-      <Separator orientation="vertical" class="mx-1 h-5" />
-
-      <Popover.Root>
-        <Popover.Trigger>
-          {#snippet child({ props })}
-            <Button
-              {...props}
-              variant="ghost"
-              size="sm"
-              aria-label="Filter by level"
-              class={cn(
-                'h-9 gap-1.5 px-2',
-                filter.levels.size > 0
-                  ? 'text-foreground bg-accent ring-1 ring-border'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
-              )}
-            >
-              <SlidersHorizontal class="h-4 w-4" />
-              {#if filter.levels.size > 0}
-                <Badge variant="outline" class="h-4 px-1 text-[10px] tabular-nums">
-                  {filter.levels.size}
-                </Badge>
-              {/if}
-            </Button>
-          {/snippet}
-        </Popover.Trigger>
-        <Popover.Content class="w-56 p-2">
-          <div class="text-muted-foreground px-2 py-1 text-[11px] font-semibold uppercase tracking-wider">
-            Level
-          </div>
-          <ul class="flex flex-col">
-            {#each allLevels as lvl (lvl)}
-              {@const checked = filter.levels.has(lvl)}
-              {@const count = levelCount(lvl)}
-              <li>
-                <Label
-                  class={cn(
-                    'flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-[12px] hover:bg-accent',
-                    count === 0 && !checked && 'opacity-50'
-                  )}
-                >
-                  <Checkbox
-                    {checked}
-                    onCheckedChange={() => filter.toggleLevel(lvl)}
-                  />
-                  <span class="flex-1 capitalize">{lvl}</span>
-                  <span class="text-muted-foreground tabular-nums text-[11px]">{count}</span>
-                </Label>
-              </li>
-            {/each}
-          </ul>
-          {#if filter.levels.size > 0}
-            <div class="mt-1 border-t border-border pt-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                class="h-7 w-full justify-start text-[12px] text-muted-foreground"
-                onclick={() => (filter.levels = new Set())}
-              >
-                Clear levels
-              </Button>
-            </div>
-          {/if}
-        </Popover.Content>
-      </Popover.Root>
-
-      <Popover.Root bind:open={sortOpen}>
-        <Popover.Trigger>
-          {#snippet child({ props })}
-            <Button
-              {...props}
-              variant="ghost"
-              size="sm"
-              aria-label={`Sort: ${sortLabel}`}
-              title={`Sort: ${sortLabel}`}
-              class={cn(
-                'h-9 px-2',
-                filter.sort !== 'recent'
-                  ? 'bg-foreground/10 text-foreground ring-1 ring-foreground/30'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
-              )}
-            >
-              <ArrowUpDown class="h-4 w-4" />
-            </Button>
-          {/snippet}
-        </Popover.Trigger>
-        <Popover.Content class="w-56 p-1" align="end">
-          <div class="text-muted-foreground px-2 py-1 text-[11px] font-semibold uppercase tracking-wider">
-            Sort by
-          </div>
-          <ul class="flex flex-col" role="menu">
-            {#each SORT_OPTIONS as opt (opt.key)}
-              {@const active = filter.sort === opt.key}
-              <li role="none">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  role="menuitem"
-                  onclick={() => {
-                    filter.sort = opt.key;
-                    sortOpen = false;
-                  }}
-                  class={cn(
-                    'h-auto w-full justify-start gap-2 px-2 py-1.5 text-[12px]',
-                    active ? 'bg-foreground/10 text-foreground' : 'text-muted-foreground'
-                  )}
-                >
-                  <span class="flex h-3.5 w-3.5 items-center justify-center text-foreground">
-                    {#if active}<Check class="h-3.5 w-3.5" />{/if}
-                  </span>
-                  <span class="flex-1 text-left">{opt.label}</span>
-                  <span class="text-muted-foreground tabular-nums text-[11px]">{opt.hint}</span>
-                </Button>
-              </li>
-            {/each}
-          </ul>
-        </Popover.Content>
-      </Popover.Root>
-    </div>
+  <div class="border-b border-border px-3 py-2">
+    <UnifiedInput
+      bind:value={inputValue}
+      bind:this={unifiedRef}
+      matchCount={visible.length}
+      {sparkline}
+      placeholder="filter — try `crashes overnight` or `top 10 errors today`"
+    />
   </div>
 
   {#if hasActiveFilter && !load.initialLoad}
     <div
       class="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground"
     >
-      <span class="text-foreground tabular-nums font-medium">
-        {visible.length}
-      </span>
+      <span class="text-foreground tabular-nums font-medium">{visible.length}</span>
       <span>of</span>
       <span class="tabular-nums">{projectTotal}</span>
-      {#if filter.query.trim().length > 0}
-        <span class="text-border">·</span>
-        {#if queryMode === 'regex' || queryMode === 'badRegex'}
-          <span class={queryMode === 'regex' ? 'text-amber-500' : 'text-destructive'}>regex:</span>
-          <span class="font-mono {queryMode === 'regex' ? 'text-amber-500' : 'text-destructive'}">{filter.query}</span>
-        {:else}
-          <span>query:</span>
-          <span class="text-foreground font-mono">"{filter.query}"</span>
-        {/if}
-      {/if}
-      {#if statusReadout && (filter.statuses.size !== 1 || !filter.statuses.has('unresolved'))}
-        <span class="text-border">·</span>
-        <span>status:</span>
-        <span class="text-foreground">{statusReadout}</span>
-      {/if}
-      {#if levelReadout}
-        <span class="text-border">·</span>
-        <span>level:</span>
-        <span class="text-foreground">{levelReadout}</span>
-      {/if}
-      {#if filter.sinceMs != null}
-        <span class="text-border">·</span>
-        <span>since:</span>
-        <span class="text-foreground">{sinceLabel(filter.sinceMs)}</span>
-      {/if}
-      {#if filter.spikingOnly}
-        <span class="text-border">·</span>
-        <span class="text-amber-500">spiking only</span>
-      {/if}
       <Button
         variant="link"
         size="sm"
@@ -453,25 +204,24 @@
         {/each}
       </ul>
     {:else if visible.length === 0 && hasActiveFilter}
-      <div class="text-muted-foreground flex flex-col items-center gap-2 p-8 text-center text-[12px]">
+      <div
+        class="text-muted-foreground flex flex-col items-center gap-2 p-8 text-center text-[12px]"
+      >
         <p>No issues match this filter.</p>
         <Button
           variant="link"
           size="sm"
           onclick={clearFilters}
-          class="h-auto p-0 text-[12px]"
+          class="text-muted-foreground h-auto p-0 text-[12px]"
         >
           Clear all filters
         </Button>
       </div>
     {:else if visible.length === 0}
       <div
-        class={cn(
-          'flex flex-col items-center justify-center gap-3 px-6 py-12 text-center',
-          'text-muted-foreground'
-        )}
+        class="text-muted-foreground flex flex-col items-center justify-center gap-3 px-6 py-12 text-center"
       >
-        <ShieldCheck class="text-emerald-500/80 h-8 w-8" />
+        <ShieldCheck class="h-8 w-8 text-emerald-500/80" />
         <p class="text-foreground text-[13px] font-medium">{allClearLabel}</p>
         <p class="text-[12px]">No open issues in this project.</p>
       </div>

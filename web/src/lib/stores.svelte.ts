@@ -34,7 +34,7 @@ class IssuesStore {
   }
 }
 
-class FilterStore {
+export class FilterStore {
   query = $state('');
   // Default view shows what's actionable; resolved/muted/ignored are hidden
   // until the user opts in. Power users can toggle via the list header.
@@ -56,6 +56,16 @@ class FilterStore {
   // (preserves prior behavior). Mirrors the URL token defined in
   // lib/filterUrl.ts.
   sort = $state<SortKey>('recent');
+  // Cap the visible-issues result to N rows. Driven by `top N`/`limit:N`
+  // tokens in the unified input. null = no cap (full list).
+  limit = $state<number | null>(null);
+  // "Just-appeared" filter — keep only issues whose first_seen is inside
+  // the active time window (or the last hour when no window is set).
+  // Driven by `new` / `fresh` keywords in the unified input.
+  newOnly = $state(false);
+  // Inverse: issues that have gone quiet — last_seen older than 24h and
+  // status still unresolved. Driven by `stale` / `old` keywords.
+  staleOnly = $state(false);
 
   toggleStatus(s: IssueStatus) {
     const next = new Set(this.statuses);
@@ -163,22 +173,22 @@ function compareIssues(a: Issue, b: Issue, key: SortKey): number {
       );
     case 'count':
       return b.event_count - a.event_count || tie;
-    case 'created':
-      return (
-        Date.parse(b.first_seen) - Date.parse(a.first_seen) || tie
-      );
-    case 'oldest':
-      return (
-        Date.parse(a.first_seen) - Date.parse(b.first_seen) || tie
-      );
   }
 }
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
 export function visibleIssues(opts: VisibleIssuesOpts = {}): Issue[] {
   const parsed = parseQuery(filter.query);
   const levelFilter = filter.levels;
   const now = opts.now ?? Date.now();
   const sinceCutoff = filter.sinceMs == null ? null : now - filter.sinceMs;
+  // "new" reuses the active window when set; defaults to the last hour
+  // so a bare `new` token still filters something useful.
+  const newCutoff = now - (filter.sinceMs ?? HOUR_MS);
+  // "stale" means first_seen older than 24h AND status still open.
+  const staleCutoff = now - DAY_MS;
   const filtered = issues.list.filter((i) => {
     if (i.project !== projects.current) return false;
     if (!filter.statuses.has(i.status)) return false;
@@ -195,6 +205,15 @@ export function visibleIssues(opts: VisibleIssuesOpts = {}): Issue[] {
       // them via a NaN comparison short-circuit.
       if (!Number.isFinite(seen) || seen < sinceCutoff) return false;
     }
+    if (filter.newOnly) {
+      const seen = Date.parse(i.first_seen);
+      if (!Number.isFinite(seen) || seen < newCutoff) return false;
+    }
+    if (filter.staleOnly) {
+      const seen = Date.parse(i.first_seen);
+      if (!Number.isFinite(seen) || seen > staleCutoff) return false;
+      if (i.status !== 'unresolved') return false;
+    }
     if (filter.spikingOnly) {
       if (!opts.isSpiking || !opts.isSpiking(i.id)) return false;
     }
@@ -203,7 +222,12 @@ export function visibleIssues(opts: VisibleIssuesOpts = {}): Issue[] {
   });
   // Sort in place — `filtered` is a fresh array from `.filter()`, not aliased
   // to anything external, so mutating it here is safe.
-  return filtered.sort((a, b) => compareIssues(a, b, filter.sort));
+  filtered.sort((a, b) => compareIssues(a, b, filter.sort));
+  // Limit applies AFTER the sort so "top 10" picks the 10 highest by the
+  // current sort axis, not 10 random issues that happen to come first.
+  return filter.limit != null && filter.limit > 0
+    ? filtered.slice(0, filter.limit)
+    : filtered;
 }
 
 function matches(i: Issue, parsed: ParsedQuery): boolean {

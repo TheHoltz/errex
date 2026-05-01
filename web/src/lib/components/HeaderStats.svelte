@@ -20,9 +20,32 @@
   // "broken pipe".
   const INGEST_STALE_MS = 5 * 60 * 1000;
 
-  const newLastHour = $derived.by(() => {
+  // Reflect the popover's selection in the header chip. When no window is
+  // active the chip behaves as the historical 1h shortcut; when a window IS
+  // active the chip shows that window's count and clears it on click — so
+  // there's a single readout for the current scope, not two doorways.
+  const SINCE_TOKENS: { ms: number; label: string }[] = [
+    { ms: 5 * 60 * 1000,           label: '5m'  },
+    { ms: 15 * 60 * 1000,          label: '15m' },
+    { ms: 60 * 60 * 1000,          label: '1h'  },
+    { ms: 24 * 60 * 60 * 1000,     label: '24h' },
+    { ms: 7 * 24 * 60 * 60 * 1000, label: '7d'  }
+  ];
+
+  const activeWindow = $derived(
+    filter.sinceMs == null
+      ? { ms: SINCE_1H, label: '1h', isActive: false }
+      : (() => {
+          const match = SINCE_TOKENS.find((t) => t.ms === filter.sinceMs);
+          return match
+            ? { ms: match.ms, label: match.label, isActive: true }
+            : { ms: filter.sinceMs, label: 'window', isActive: true };
+        })()
+  );
+
+  const newInWindow = $derived.by(() => {
     void eventStream.tick;
-    const cutoff = Date.now() - SINCE_1H;
+    const cutoff = Date.now() - activeWindow.ms;
     return ofProject.filter(
       (i) => +new Date(i.first_seen) >= cutoff && i.status === 'unresolved'
     ).length;
@@ -63,15 +86,16 @@
     return Date.now() - eventStream.lastAt > INGEST_STALE_MS;
   });
 
-  function toggleSince1h() {
-    filter.sinceMs = filter.sinceMs === SINCE_1H ? null : SINCE_1H;
+  // No window → set 1h (legacy shortcut). Any window active → clear, so the
+  // chip is also the user's "step out of the current scope" affordance.
+  function toggleWindow() {
+    filter.sinceMs = activeWindow.isActive ? null : SINCE_1H;
   }
 
   function toggleSpiking() {
     filter.spikingOnly = !filter.spikingOnly;
   }
 
-  const newActive = $derived(filter.sinceMs === SINCE_1H);
   const spikeActive = $derived(filter.spikingOnly);
 </script>
 
@@ -82,34 +106,44 @@
         <button
           {...props}
           type="button"
-          onclick={toggleSince1h}
-          aria-pressed={newActive}
-          aria-label="Filter to issues first seen in the last hour"
+          onclick={toggleWindow}
+          aria-pressed={activeWindow.isActive}
+          aria-label={activeWindow.isActive
+            ? `Clear ${activeWindow.label} time window`
+            : 'Filter to issues first seen in the last hour'}
           class={cn(
             'flex items-baseline gap-1.5 rounded px-1.5 py-0.5 transition-colors',
             'hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            newActive && 'bg-accent ring-1 ring-border'
+            activeWindow.isActive && 'bg-accent ring-1 ring-border'
           )}
         >
           <AlertTriangle
             class={cn(
               'h-3 w-3',
-              newLastHour > 0 ? 'text-amber-400' : 'text-muted-foreground/60'
+              newInWindow > 0 ? 'text-amber-400' : 'text-muted-foreground/60'
             )}
           />
           <span
             class={cn(
               'text-[13px] font-semibold tabular-nums',
-              newLastHour > 0 ? 'text-foreground' : 'text-muted-foreground'
+              newInWindow > 0 ? 'text-foreground' : 'text-muted-foreground'
             )}
           >
-            {newLastHour}
+            {newInWindow}
           </span>
-          <span class="text-muted-foreground text-[10px] uppercase tracking-wider">new · 1h</span>
+          <span class="text-muted-foreground text-[10px] uppercase tracking-wider"
+            >new · {activeWindow.label}</span
+          >
         </button>
       {/snippet}
     </Tooltip.Trigger>
-    <Tooltip.Content>Issues first seen in the last hour. Click to filter.</Tooltip.Content>
+    <Tooltip.Content>
+      {#if activeWindow.isActive}
+        Issues first seen in the last {activeWindow.label}. Click to clear the time filter.
+      {:else}
+        Issues first seen in the last hour. Click to filter.
+      {/if}
+    </Tooltip.Content>
   </Tooltip.Root>
 
   <Separator orientation="vertical" class="h-4" />
