@@ -165,6 +165,8 @@
     LEVEL_ORDER.filter((l) => filter.levels.has(l)).join(', ')
   );
 
+  let sortOpen = $state(false);
+
   function clearFilters() {
     filter.query = '';
     filter.statuses = new Set<IssueStatus>(['unresolved']);
@@ -329,31 +331,24 @@
         </Popover.Content>
       </Popover.Root>
 
-      <Popover.Root>
+      <Popover.Root bind:open={sortOpen}>
         <Popover.Trigger>
           {#snippet child({ props })}
-            <Tooltip.Root>
-              <Tooltip.Trigger>
-                {#snippet child({ props: tipProps })}
-                  <Button
-                    {...props}
-                    {...tipProps}
-                    variant="ghost"
-                    size="sm"
-                    aria-label={`Sort: ${sortLabel}`}
-                    class={cn(
-                      'h-9 px-2',
-                      filter.sort !== 'recent'
-                        ? 'bg-foreground/10 text-foreground ring-1 ring-foreground/30'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
-                    )}
-                  >
-                    <ArrowUpDown class="h-4 w-4" />
-                  </Button>
-                {/snippet}
-              </Tooltip.Trigger>
-              <Tooltip.Content>Sort: {sortLabel}</Tooltip.Content>
-            </Tooltip.Root>
+            <Button
+              {...props}
+              variant="ghost"
+              size="sm"
+              aria-label={`Sort: ${sortLabel}`}
+              title={`Sort: ${sortLabel}`}
+              class={cn(
+                'h-9 px-2',
+                filter.sort !== 'recent'
+                  ? 'bg-foreground/10 text-foreground ring-1 ring-foreground/30'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
+              )}
+            >
+              <ArrowUpDown class="h-4 w-4" />
+            </Button>
           {/snippet}
         </Popover.Trigger>
         <Popover.Content class="w-56 p-1" align="end">
@@ -368,7 +363,10 @@
                   variant="ghost"
                   size="sm"
                   role="menuitem"
-                  onclick={() => (filter.sort = opt.key)}
+                  onclick={() => {
+                    filter.sort = opt.key;
+                    sortOpen = false;
+                  }}
                   class={cn(
                     'h-auto w-full justify-start gap-2 px-2 py-1.5 text-[12px]',
                     active ? 'bg-foreground/10 text-foreground' : 'text-muted-foreground'
