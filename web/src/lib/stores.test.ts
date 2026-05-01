@@ -35,6 +35,7 @@ beforeEach(() => {
   filter.levels = new Set<IssueLevel>();
   filter.sinceMs = null;
   filter.spikingOnly = false;
+  filter.sort = 'recent';
   projects.current = 'p';
   selection.issueId = null;
   selection.event = null;
@@ -60,13 +61,22 @@ describe('IssuesStore', () => {
     expect(issues.list[0]?.title).toBe('second');
   });
 
-  it('list orders by last_seen desc', () => {
+  it('list returns every issue (order is no longer guaranteed)', () => {
     issues.reset([
       issue({ id: 1, last_seen: '2026-01-01T00:00:00Z' }),
       issue({ id: 2, last_seen: '2026-01-03T00:00:00Z' }),
       issue({ id: 3, last_seen: '2026-01-02T00:00:00Z' })
     ]);
-    expect(issues.list.map((i) => i.id)).toEqual([2, 3, 1]);
+    expect(issues.list.map((i) => i.id).sort()).toEqual([1, 2, 3]);
+  });
+
+  it('visibleIssues default sort = recent (last_seen DESC, preserves prior behavior)', () => {
+    issues.reset([
+      issue({ id: 1, last_seen: '2026-01-01T00:00:00Z' }),
+      issue({ id: 2, last_seen: '2026-01-03T00:00:00Z' }),
+      issue({ id: 3, last_seen: '2026-01-02T00:00:00Z' })
+    ]);
+    expect(visibleIssues().map((i) => i.id)).toEqual([2, 3, 1]);
   });
 });
 

@@ -4,7 +4,8 @@ import type {
   IssueLevel,
   IssueStatus,
   NormalizedEvent,
-  ProjectSummary
+  ProjectSummary,
+  SortKey
 } from './types';
 
 // Reactive global state via Svelte 5 runes. Modules are evaluated once, so the
@@ -14,11 +15,7 @@ import type {
 class IssuesStore {
   byId = $state<Map<number, Issue>>(new Map());
 
-  list = $derived.by(() => {
-    const arr = Array.from(this.byId.values());
-    arr.sort((a, b) => +new Date(b.last_seen) - +new Date(a.last_seen));
-    return arr;
-  });
+  list = $derived.by(() => Array.from(this.byId.values()));
 
   reset(issues: Issue[]) {
     const m = new Map<number, Issue>();
@@ -55,6 +52,10 @@ class FilterStore {
   // spiking. The actual spike predicate lives in `eventStream` and is
   // passed in at call-time to keep this module pure.
   spikingOnly = $state(false);
+  // Server-side ordering of the visible list. Default = newest activity
+  // (preserves prior behavior). Mirrors the URL token defined in
+  // lib/filterUrl.ts.
+  sort = $state<SortKey>('recent');
 
   toggleStatus(s: IssueStatus) {
     const next = new Set(this.statuses);
@@ -121,12 +122,37 @@ export interface VisibleIssuesOpts {
   isSpiking?: (id: number) => boolean;
 }
 
+function compareIssues(a: Issue, b: Issue, key: SortKey): number {
+  // Tie-break on id ASC for deterministic order across renders.
+  const tie = a.id - b.id;
+  switch (key) {
+    case 'recent':
+      return (
+        Date.parse(b.last_seen) - Date.parse(a.last_seen) || tie
+      );
+    case 'stale':
+      return (
+        Date.parse(a.last_seen) - Date.parse(b.last_seen) || tie
+      );
+    case 'count':
+      return b.event_count - a.event_count || tie;
+    case 'created':
+      return (
+        Date.parse(b.first_seen) - Date.parse(a.first_seen) || tie
+      );
+    case 'oldest':
+      return (
+        Date.parse(a.first_seen) - Date.parse(b.first_seen) || tie
+      );
+  }
+}
+
 export function visibleIssues(opts: VisibleIssuesOpts = {}): Issue[] {
   const q = filter.query.trim().toLowerCase();
   const levelFilter = filter.levels;
   const now = opts.now ?? Date.now();
   const sinceCutoff = filter.sinceMs == null ? null : now - filter.sinceMs;
-  return issues.list.filter((i) => {
+  const filtered = issues.list.filter((i) => {
     if (i.project !== projects.current) return false;
     if (!filter.statuses.has(i.status)) return false;
     if (levelFilter.size > 0) {
@@ -148,6 +174,9 @@ export function visibleIssues(opts: VisibleIssuesOpts = {}): Issue[] {
     if (q && !matches(i, q)) return false;
     return true;
   });
+  // Sort in place — `filtered` is a fresh array from `.filter()`, not aliased
+  // to anything external, so mutating it here is safe.
+  return filtered.sort((a, b) => compareIssues(a, b, filter.sort));
 }
 
 function matches(i: Issue, q: string): boolean {

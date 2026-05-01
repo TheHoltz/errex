@@ -36,6 +36,9 @@ export type ClientMessage = { type: 'ping' };
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
+/** Issue list ordering. Mirrored as a URL token in lib/filterUrl.ts. */
+export type SortKey = 'recent' | 'stale' | 'count' | 'created' | 'oldest';
+
 // ----- Event detail -----
 //
 // Mirrors errex_proto::Event for the fields the UI renders. The daemon
