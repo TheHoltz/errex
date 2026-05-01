@@ -229,3 +229,51 @@ describe('visibleIssues + level filter', () => {
     expect(visibleIssues().map((i) => i.id)).toEqual([2]);
   });
 });
+
+describe('visibleIssues + sort', () => {
+  function fixture() {
+    // Insertion order intentionally shuffled so no single test's expected
+    // permutation matches insertion order (a no-op comparator would fail
+    // every test, not pass by accident on `oldest`).
+    issues.reset([
+      issue({ id: 3, event_count: 1,  first_seen: '2026-01-03T00:00:00Z', last_seen: '2026-01-06T00:00:00Z' }),
+      issue({ id: 1, event_count: 3,  first_seen: '2026-01-01T00:00:00Z', last_seen: '2026-01-05T00:00:00Z' }),
+      issue({ id: 4, event_count: 7,  first_seen: '2026-01-04T00:00:00Z', last_seen: '2026-01-03T00:00:00Z' }),
+      issue({ id: 2, event_count: 11, first_seen: '2026-01-02T00:00:00Z', last_seen: '2026-01-04T00:00:00Z' })
+    ]);
+  }
+
+  it('sort=stale orders by last_seen ASC', () => {
+    fixture();
+    filter.sort = 'stale';
+    expect(visibleIssues().map((i) => i.id)).toEqual([4, 2, 1, 3]);
+  });
+
+  it('sort=count orders by event_count DESC', () => {
+    fixture();
+    filter.sort = 'count';
+    expect(visibleIssues().map((i) => i.id)).toEqual([2, 4, 1, 3]);
+  });
+
+  it('sort=created orders by first_seen DESC', () => {
+    fixture();
+    filter.sort = 'created';
+    expect(visibleIssues().map((i) => i.id)).toEqual([4, 3, 2, 1]);
+  });
+
+  it('sort=oldest orders by first_seen ASC', () => {
+    fixture();
+    filter.sort = 'oldest';
+    expect(visibleIssues().map((i) => i.id)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('breaks ties on id ASC for determinism', () => {
+    issues.reset([
+      issue({ id: 9, event_count: 5, last_seen: '2026-01-01T00:00:00Z' }),
+      issue({ id: 5, event_count: 5, last_seen: '2026-01-01T00:00:00Z' }),
+      issue({ id: 7, event_count: 5, last_seen: '2026-01-01T00:00:00Z' })
+    ]);
+    filter.sort = 'count';
+    expect(visibleIssues().map((i) => i.id)).toEqual([5, 7, 9]);
+  });
+});
