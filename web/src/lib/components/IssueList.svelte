@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    ArrowUpDown,
     Ban,
     BellOff,
     Check,
@@ -23,7 +24,7 @@
   import { eventStream } from '$lib/eventStream.svelte';
   import { parseFilterParams, serializeFilterParams } from '$lib/filterUrl';
   import { filter, issues, load, projects, selection, visibleIssues } from '$lib/stores.svelte';
-  import type { IssueLevel, IssueStatus } from '$lib/types';
+  import type { IssueLevel, IssueStatus, SortKey } from '$lib/types';
   import { cn } from '$lib/utils';
   import IssueRow from './IssueRow.svelte';
 
@@ -142,6 +143,18 @@
   // Stable, human-readable order for the readout: matches the chip row.
   const STATUS_ORDER: IssueStatus[] = ['unresolved', 'resolved', 'muted', 'ignored'];
   const LEVEL_ORDER: IssueLevel[] = ['fatal', 'error', 'warning', 'info', 'debug'];
+
+  const SORT_OPTIONS: { key: SortKey; label: string; hint: string }[] = [
+    { key: 'recent',  label: 'Newest activity',  hint: 'last seen ↓'  },
+    { key: 'stale',   label: 'Oldest activity',  hint: 'last seen ↑'  },
+    { key: 'count',   label: 'Most frequent',    hint: 'count ↓'      },
+    { key: 'created', label: 'Recently created', hint: 'first seen ↓' },
+    { key: 'oldest',  label: 'Longest open',     hint: 'first seen ↑' }
+  ];
+
+  const sortLabel = $derived(
+    SORT_OPTIONS.find((o) => o.key === filter.sort)?.label ?? 'Newest activity'
+  );
 
   const statusReadout = $derived(
     STATUS_ORDER.filter((s) => filter.statuses.has(s)).join(' + ')
@@ -285,6 +298,63 @@
               </Button>
             </div>
           {/if}
+        </Popover.Content>
+      </Popover.Root>
+
+      <Popover.Root>
+        <Popover.Trigger>
+          {#snippet child({ props })}
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                {#snippet child({ props: tipProps })}
+                  <Button
+                    {...props}
+                    {...tipProps}
+                    variant="ghost"
+                    size="sm"
+                    aria-label={`Sort: ${sortLabel}`}
+                    class={cn(
+                      'h-9 px-2',
+                      filter.sort !== 'recent'
+                        ? 'bg-foreground/10 text-foreground ring-1 ring-foreground/30'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
+                    )}
+                  >
+                    <ArrowUpDown class="h-4 w-4" />
+                  </Button>
+                {/snippet}
+              </Tooltip.Trigger>
+              <Tooltip.Content>Sort: {sortLabel}</Tooltip.Content>
+            </Tooltip.Root>
+          {/snippet}
+        </Popover.Trigger>
+        <Popover.Content class="w-56 p-1" align="end">
+          <div class="text-muted-foreground px-2 py-1 text-[11px] font-semibold uppercase tracking-wider">
+            Sort by
+          </div>
+          <ul class="flex flex-col" role="menu">
+            {#each SORT_OPTIONS as opt (opt.key)}
+              {@const active = filter.sort === opt.key}
+              <li role="none">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  role="menuitem"
+                  onclick={() => (filter.sort = opt.key)}
+                  class={cn(
+                    'h-auto w-full justify-start gap-2 px-2 py-1.5 text-[12px]',
+                    active ? 'bg-foreground/10 text-foreground' : 'text-muted-foreground'
+                  )}
+                >
+                  <span class="flex h-3.5 w-3.5 items-center justify-center text-foreground">
+                    {#if active}<Check class="h-3.5 w-3.5" />{/if}
+                  </span>
+                  <span class="flex-1 text-left">{opt.label}</span>
+                  <span class="text-muted-foreground tabular-nums text-[11px]">{opt.hint}</span>
+                </Button>
+              </li>
+            {/each}
+          </ul>
         </Popover.Content>
       </Popover.Root>
     </div>
