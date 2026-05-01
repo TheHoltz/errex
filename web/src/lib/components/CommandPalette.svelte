@@ -116,10 +116,15 @@
     }
 
     // Issue search (only for the active project, top 50 by recency).
+    // IssuesStore.list is unordered since the sort feature moved ordering
+    // into visibleIssues. Sort here so "top 50" stays "by recency."
     const q = query.trim().toLowerCase();
     if (q.length >= 1) {
+      const recent = [...issues.list].sort(
+        (a, b) => Date.parse(b.last_seen) - Date.parse(a.last_seen)
+      );
       let count = 0;
-      for (const issue of issues.list) {
+      for (const issue of recent) {
         if (issue.project !== projects.current) continue;
         if (
           !issue.title.toLowerCase().includes(q) &&
