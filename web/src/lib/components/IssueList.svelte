@@ -23,7 +23,7 @@
   import * as Tooltip from '$lib/components/ui/tooltip';
   import { eventStream } from '$lib/eventStream.svelte';
   import { parseFilterParams, serializeFilterParams } from '$lib/filterUrl';
-  import { filter, issues, load, projects, selection, visibleIssues } from '$lib/stores.svelte';
+  import { filter, issues, load, parseQuery, projects, selection, visibleIssues } from '$lib/stores.svelte';
   import type { IssueLevel, IssueStatus, SortKey } from '$lib/types';
   import { cn } from '$lib/utils';
   import IssueRow from './IssueRow.svelte';
@@ -133,6 +133,8 @@
       filter.sort !== 'recent'
   );
 
+  const queryMode = $derived(parseQuery(filter.query).mode);
+
   function sinceLabel(ms: number): string {
     if (ms === 60 * 60 * 1000) return '1h';
     if (ms === 24 * 60 * 60 * 1000) return '24h';
@@ -184,10 +186,36 @@
         class="h-9 pl-8 pr-16 text-[13px]"
       />
       {#if filter.query.length > 0}
+        {#if queryMode === 'regex' || queryMode === 'badRegex'}
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              {#snippet child({ props })}
+                <span
+                  {...props}
+                  data-testid="query-mode-tag"
+                  class={cn(
+                    'absolute right-9 top-1/2 -translate-y-1/2 rounded border px-1.5 py-0.5 font-mono text-[10px]',
+                    queryMode === 'regex'
+                      ? 'text-amber-500 border-amber-500/40 bg-amber-500/10'
+                      : 'text-destructive border-destructive/50 bg-destructive/10'
+                  )}
+                  aria-label={queryMode === 'regex' ? 'Regex mode' : 'Invalid regex'}
+                >
+                  regex
+                </span>
+              {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Content>
+              {queryMode === 'regex'
+                ? 'Regex mode (case-insensitive). Press Esc to clear.'
+                : 'Invalid regex — falling back to literal substring search.'}
+            </Tooltip.Content>
+          </Tooltip.Root>
+        {/if}
         <Button
           variant="ghost"
           size="icon"
-          class="absolute right-8 top-1/2 h-6 w-6 -translate-y-1/2 text-muted-foreground"
+          class="absolute right-1 top-1/2 h-6 w-6 -translate-y-1/2 text-muted-foreground"
           aria-label="Clear filter query"
           onclick={() => (filter.query = '')}
         >

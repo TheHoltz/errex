@@ -28,6 +28,44 @@ afterEach(() => {
   issues.reset([]);
 });
 
+describe('IssueList regex tag', () => {
+  it('shows the / kbd hint when query is empty', () => {
+    render(IssueListWrapper);
+    expect(screen.getByText('/')).toBeInTheDocument();
+    expect(screen.queryByTestId('query-mode-tag')).toBeNull();
+  });
+
+  it('shows an amber "regex" tag when query starts with a valid /pattern', async () => {
+    render(IssueListWrapper);
+    flushSync(() => {
+      filter.query = '/Error.*/';
+    });
+    const tag = await screen.findByTestId('query-mode-tag');
+    expect(tag).toHaveTextContent('regex');
+    expect(tag.className).toMatch(/text-amber-500/);
+  });
+
+  it('shows a destructive red "regex" tag when query is invalid', async () => {
+    render(IssueListWrapper);
+    flushSync(() => {
+      filter.query = '/Error[';
+    });
+    const tag = await screen.findByTestId('query-mode-tag');
+    expect(tag).toHaveTextContent('regex');
+    expect(tag.className).toMatch(/text-destructive/);
+  });
+
+  it('hides the kbd hint and tag when in substring mode with text', async () => {
+    render(IssueListWrapper);
+    flushSync(() => {
+      filter.query = 'auth';
+    });
+    expect(screen.queryByTestId('query-mode-tag')).toBeNull();
+    // The clear button takes the right slot at this point; the kbd is gone too.
+    expect(screen.queryByText('/')).toBeNull();
+  });
+});
+
 describe('IssueList sort menu', () => {
   it('renders the sort button with no label (icon-only)', () => {
     render(IssueListWrapper);
