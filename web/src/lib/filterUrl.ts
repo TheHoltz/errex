@@ -2,7 +2,7 @@
 // active filter is shareable, reload-safe, and bookmarkable. Defaults
 // are omitted from the query string to keep clean URLs the common case.
 
-import type { IssueLevel, IssueStatus } from './types';
+import type { IssueLevel, IssueStatus, SortKey } from './types';
 
 export interface FilterState {
   query: string;
@@ -10,10 +10,12 @@ export interface FilterState {
   levels: Set<IssueLevel>;
   sinceMs: number | null;
   spikingOnly: boolean;
+  sort: SortKey;
 }
 
 const ALL_STATUSES: IssueStatus[] = ['unresolved', 'resolved', 'muted', 'ignored'];
 const ALL_LEVELS: IssueLevel[] = ['debug', 'info', 'warning', 'error', 'fatal'];
+export const ALL_SORTS: SortKey[] = ['recent', 'stale', 'count', 'created', 'oldest'];
 
 // Whitelisted "since" presets. Keeping the URL token symbolic (1h/24h/7d)
 // rather than raw milliseconds means a stale share link can't smuggle in
@@ -49,6 +51,7 @@ export function serializeFilterParams(f: FilterState): URLSearchParams {
     if (token) p.set('since', token);
   }
   if (f.spikingOnly) p.set('spike', '1');
+  if (f.sort !== 'recent') p.set('sort', f.sort);
   return p;
 }
 
@@ -87,5 +90,11 @@ export function parseFilterParams(p: URLSearchParams): FilterState {
 
   const spikingOnly = p.get('spike') === '1';
 
-  return { query, statuses, levels, sinceMs, spikingOnly };
+  const sortRaw = p.get('sort');
+  const sort: SortKey =
+    sortRaw != null && (ALL_SORTS as string[]).includes(sortRaw)
+      ? (sortRaw as SortKey)
+      : 'recent';
+
+  return { query, statuses, levels, sinceMs, spikingOnly, sort };
 }

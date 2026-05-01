@@ -50,6 +50,7 @@
     filter.levels = next.levels;
     filter.sinceMs = next.sinceMs;
     filter.spikingOnly = next.spikingOnly;
+    filter.sort = next.sort;
   });
 
   // Push filter state into the URL so the active filter is reload-safe and
@@ -62,7 +63,8 @@
       statuses: filter.statuses,
       levels: filter.levels,
       sinceMs: filter.sinceMs,
-      spikingOnly: filter.spikingOnly
+      spikingOnly: filter.spikingOnly,
+      sort: filter.sort
     });
     const search = params.toString();
     const target = location.pathname + (search ? `?${search}` : '') + location.hash;
@@ -126,7 +128,8 @@
       !filter.statuses.has('unresolved') ||
       filter.levels.size > 0 ||
       filter.sinceMs != null ||
-      filter.spikingOnly
+      filter.spikingOnly ||
+      filter.sort !== 'recent'
   );
 
   function sinceLabel(ms: number): string {
@@ -153,6 +156,7 @@
     filter.levels = new Set<IssueLevel>();
     filter.sinceMs = null;
     filter.spikingOnly = false;
+    filter.sort = 'recent';
   }
 </script>
 
