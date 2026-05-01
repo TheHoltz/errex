@@ -68,13 +68,13 @@
 }
 
 :root.dark {
-  --background: 0 0% 7%;
+  --background: 0 0% 4%;
   --foreground: 0 0% 95%;
   --muted: 0 0% 13%;
   --muted-foreground: 0 0% 63%;
-  --popover: 0 0% 9%;
+  --popover: 0 0% 6%;
   --popover-foreground: 0 0% 95%;
-  --card: 0 0% 9%;
+  --card: 0 0% 6%;
   --card-foreground: 0 0% 95%;
   --border: 0 0% 16%;
   --input: 0 0% 16%;
