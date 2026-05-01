@@ -399,8 +399,13 @@
       <span class="tabular-nums">{projectTotal}</span>
       {#if filter.query.trim().length > 0}
         <span class="text-border">·</span>
-        <span>query:</span>
-        <span class="text-foreground font-mono">"{filter.query}"</span>
+        {#if queryMode === 'regex' || queryMode === 'badRegex'}
+          <span class={queryMode === 'regex' ? 'text-amber-500' : 'text-destructive'}>regex:</span>
+          <span class="font-mono {queryMode === 'regex' ? 'text-amber-500' : 'text-destructive'}">{filter.query}</span>
+        {:else}
+          <span>query:</span>
+          <span class="text-foreground font-mono">"{filter.query}"</span>
+        {/if}
       {/if}
       {#if statusReadout && (filter.statuses.size !== 1 || !filter.statuses.has('unresolved'))}
         <span class="text-border">·</span>

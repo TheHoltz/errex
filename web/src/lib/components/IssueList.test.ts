@@ -92,3 +92,23 @@ describe('IssueList sort menu', () => {
     expect(btn.className).toMatch(/ring-1/);
   });
 });
+
+describe('IssueList active-filter readout', () => {
+  it('labels the query "query:" when it is plain substring text', async () => {
+    render(IssueListWrapper);
+    flushSync(() => {
+      filter.query = 'auth';
+    });
+    expect(await screen.findByText(/query:/)).toBeInTheDocument();
+    expect(screen.queryByText(/regex:/)).toBeNull();
+  });
+
+  it('labels the query "regex:" when in regex mode', async () => {
+    render(IssueListWrapper);
+    flushSync(() => {
+      filter.query = '/Error.*/';
+    });
+    expect(await screen.findByText(/regex:/)).toBeInTheDocument();
+    expect(screen.queryByText(/query:/)).toBeNull();
+  });
+});
