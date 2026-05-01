@@ -6,6 +6,7 @@ import {
   filter,
   issues,
   load,
+  parseQuery,
   projects,
   selection,
   visibleIssues
@@ -275,5 +276,88 @@ describe('visibleIssues + sort', () => {
     ]);
     filter.sort = 'count';
     expect(visibleIssues().map((i) => i.id)).toEqual([5, 7, 9]);
+  });
+});
+
+describe('parseQuery', () => {
+  it('returns empty for blank input', () => {
+    expect(parseQuery('').mode).toBe('empty');
+    expect(parseQuery('   ').mode).toBe('empty');
+  });
+
+  it('returns substring for plain text', () => {
+    const p = parseQuery('Error 403');
+    expect(p.mode).toBe('substring');
+    if (p.mode === 'substring') expect(p.q).toBe('Error 403');
+  });
+
+  it('returns substring when query is just /', () => {
+    expect(parseQuery('/').mode).toBe('substring');
+  });
+
+  it('returns regex for /pattern with optional trailing slash', () => {
+    const a = parseQuery('/Error.*403');
+    const b = parseQuery('/Error.*403/');
+    expect(a.mode).toBe('regex');
+    expect(b.mode).toBe('regex');
+    if (a.mode === 'regex' && b.mode === 'regex') {
+      expect(a.re.test('Error: HTTP status code: 403')).toBe(true);
+      expect(b.re.test('Error: HTTP status code: 403')).toBe(true);
+    }
+  });
+
+  it('regex is case-insensitive', () => {
+    const p = parseQuery('/error/');
+    expect(p.mode).toBe('regex');
+    if (p.mode === 'regex') expect(p.re.test('ERROR')).toBe(true);
+  });
+
+  it('returns badRegex for invalid syntax', () => {
+    const p = parseQuery('/Error[/');
+    expect(p.mode).toBe('badRegex');
+  });
+
+  it('returns badRegex when source is empty (//)', () => {
+    expect(parseQuery('//').mode).toBe('badRegex');
+  });
+});
+
+describe('visibleIssues + regex query', () => {
+  it('regex query matches title and culprit, skips fingerprint', () => {
+    issues.reset([
+      issue({ id: 1, title: 'Error: HTTP status code: 403', culprit: 'ci in core-A.js', fingerprint: '403' }),
+      issue({ id: 2, title: 'Error: HTTP status code: 500', culprit: 'ci in core-B.js', fingerprint: '500' }),
+      issue({ id: 3, title: 'web boot abc', culprit: null, fingerprint: '403' }),
+      issue({ id: 4, title: 'GSAP target not found', culprit: null, fingerprint: 'xyz' })
+    ]);
+    filter.query = '/Error.*403/';
+    expect(visibleIssues().map((i) => i.id)).toEqual([1]);
+  });
+
+  it('regex query is case-insensitive', () => {
+    issues.reset([
+      issue({ id: 1, title: 'NetworkError', culprit: null }),
+      issue({ id: 2, title: 'TypeError', culprit: null })
+    ]);
+    filter.query = '/network/';
+    expect(visibleIssues().map((i) => i.id)).toEqual([1]);
+  });
+
+  it('invalid regex falls back to literal substring of the full string (including leading /)', () => {
+    issues.reset([
+      issue({ id: 1, title: 'message includes /Error[ literal', culprit: null }),
+      issue({ id: 2, title: 'unrelated', culprit: null })
+    ]);
+    filter.query = '/Error[';
+    expect(visibleIssues().map((i) => i.id)).toEqual([1]);
+  });
+
+  it('substring path still works for non-regex queries (covers fingerprint)', () => {
+    issues.reset([
+      issue({ id: 1, title: 'a', fingerprint: 'cafebabe' }),
+      issue({ id: 2, title: 'b', fingerprint: 'deadbeef' })
+    ]);
+    filter.query = 'cafe';
+    expect(visibleIssues().map((i) => i.id)).toEqual([1]);
   });
 });

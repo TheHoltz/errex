@@ -122,6 +122,33 @@ export interface VisibleIssuesOpts {
   isSpiking?: (id: number) => boolean;
 }
 
+/**
+ * Parsed shape of `filter.query`. Drives both the row predicate and the
+ * UI mode indicator on the input — single source of truth so the tag the
+ * user sees never disagrees with what the list shows.
+ */
+export type ParsedQuery =
+  | { mode: 'empty' }
+  | { mode: 'substring'; q: string }
+  | { mode: 'regex'; re: RegExp }
+  | { mode: 'badRegex'; q: string };
+
+export function parseQuery(raw: string): ParsedQuery {
+  const q = raw.trim();
+  if (!q) return { mode: 'empty' };
+  // Single `/` is just a one-char substring; need at least `/x` to mean regex.
+  if (!q.startsWith('/') || q.length < 2) return { mode: 'substring', q };
+  // Leading `/` is the delimiter; trailing `/` is optional and stripped.
+  let src = q.slice(1);
+  if (src.endsWith('/')) src = src.slice(0, -1);
+  if (!src) return { mode: 'badRegex', q };
+  try {
+    return { mode: 'regex', re: new RegExp(src, 'i') };
+  } catch {
+    return { mode: 'badRegex', q };
+  }
+}
+
 function compareIssues(a: Issue, b: Issue, key: SortKey): number {
   // Tie-break on id ASC for deterministic order across renders.
   const tie = a.id - b.id;
@@ -148,7 +175,7 @@ function compareIssues(a: Issue, b: Issue, key: SortKey): number {
 }
 
 export function visibleIssues(opts: VisibleIssuesOpts = {}): Issue[] {
-  const q = filter.query.trim().toLowerCase();
+  const parsed = parseQuery(filter.query);
   const levelFilter = filter.levels;
   const now = opts.now ?? Date.now();
   const sinceCutoff = filter.sinceMs == null ? null : now - filter.sinceMs;
@@ -171,7 +198,7 @@ export function visibleIssues(opts: VisibleIssuesOpts = {}): Issue[] {
     if (filter.spikingOnly) {
       if (!opts.isSpiking || !opts.isSpiking(i.id)) return false;
     }
-    if (q && !matches(i, q)) return false;
+    if (!matches(i, parsed)) return false;
     return true;
   });
   // Sort in place — `filtered` is a fresh array from `.filter()`, not aliased
@@ -179,10 +206,23 @@ export function visibleIssues(opts: VisibleIssuesOpts = {}): Issue[] {
   return filtered.sort((a, b) => compareIssues(a, b, filter.sort));
 }
 
-function matches(i: Issue, q: string): boolean {
-  return (
-    i.title.toLowerCase().includes(q) ||
-    (i.culprit?.toLowerCase().includes(q) ?? false) ||
-    i.fingerprint.toLowerCase().includes(q)
-  );
+function matches(i: Issue, parsed: ParsedQuery): boolean {
+  switch (parsed.mode) {
+    case 'empty':
+      return true;
+    case 'regex':
+      return parsed.re.test(i.title) || parsed.re.test(i.culprit ?? '');
+    case 'substring':
+    case 'badRegex': {
+      // Bad regex falls back to a literal-substring search of the full
+      // string (including the leading slash) so the user is never staring
+      // at a blank list because of a typo.
+      const ql = parsed.q.toLowerCase();
+      return (
+        i.title.toLowerCase().includes(ql) ||
+        (i.culprit?.toLowerCase().includes(ql) ?? false) ||
+        i.fingerprint.toLowerCase().includes(ql)
+      );
+    }
+  }
 }
