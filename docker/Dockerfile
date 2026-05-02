@@ -89,7 +89,9 @@ COPY --from=rootfs /pkg/data /data
 COPY --from=builder /build/target/release/errexd /usr/local/bin/errexd
 
 WORKDIR /home
-VOLUME ["/data"]
+# /data is mounted at runtime — by docker-compose's named volume locally,
+# or by a Railway Volume in production. We don't declare VOLUME here
+# because Railway's Metal builder rejects in-Dockerfile VOLUME directives.
 EXPOSE 9090 9091 9092
 
 ENV ERREX_DATA_DIR=/data/store \
