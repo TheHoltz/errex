@@ -59,24 +59,29 @@
 
   // ─── Unified-input ↔ filter store bridge ─────────────────────────────
   //
-  // The input owns its own text state; on every change it parses + writes
-  // to the discrete filter fields. A reverse effect regenerates the
-  // input's text whenever an external mutator changes the filter
-  // (e.g. HeaderStats's 1H chip), so the input never lies about state.
-  // Loops are avoided by short-circuiting when the canonical form
-  // already matches the current input value.
+  // The input owns its own text state; every change parses + writes to
+  // the discrete filter fields. A reverse effect regenerates the input
+  // whenever an EXTERNAL mutator (e.g. HeaderStats's 1H chip) changes
+  // the filter, so the input doesn't go stale.
+  //
+  // The bug to avoid: on every keystroke, effect 1 writes filter.* and
+  // effect 2 then sees filter changed, regenerates the canonical form,
+  // and snaps the input — stripping trailing whitespace mid-typing
+  // (so pressing space appears to do nothing). We track the canonical
+  // form of the LAST write-from-input and short-circuit effect 2 if
+  // the new canonical form matches it (i.e. the change came from us).
   let inputValue = $state(filterToQueryString(filter));
+  let lastWrittenByInput = $state(filterToQueryString(filter));
 
   $effect(() => {
-    // Apply parser → filter store on user input.
     const v = inputValue;
-    untrack(() => applyInputToFilter(v, filter));
+    untrack(() => {
+      applyInputToFilter(v, filter);
+      lastWrittenByInput = filterToQueryString(filter);
+    });
   });
 
   $effect(() => {
-    // Regenerate input when filter changes externally. Reading every
-    // field tracks all dependencies; we then compare against the
-    // current inputValue (untracked) to decide whether to update.
     void filter.statuses;
     void filter.levels;
     void filter.sinceMs;
@@ -88,12 +93,14 @@
     void filter.query;
     const fromFilter = filterToQueryString(filter);
     untrack(() => {
-      if (fromFilter !== inputValue) inputValue = fromFilter;
+      if (fromFilter === lastWrittenByInput) return; // we just wrote this — skip
+      inputValue = fromFilter;
+      lastWrittenByInput = fromFilter;
     });
   });
 
-  // expose the input element for keyboard shortcuts (`/` to focus).
-  let unifiedRef: { focus: () => void } | undefined = $state();
+  // Expose the input element for the `/` keyboard shortcut wired in
+  // routes/+layout.svelte → KeyboardShortcuts.
   let inputEl: HTMLInputElement | null = $state(null);
   $effect(() => {
     if (filterRef && inputEl) filterRef.current = inputEl;
@@ -161,7 +168,7 @@
   <div class="border-b border-border px-3 py-2">
     <UnifiedInput
       bind:value={inputValue}
-      bind:this={unifiedRef}
+      bind:inputEl
       matchCount={visible.length}
       {sparkline}
       placeholder="filter — try `crashes overnight` or `top 10 errors today`"

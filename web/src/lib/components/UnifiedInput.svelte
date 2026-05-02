@@ -16,6 +16,9 @@
 
   type Props = {
     value: string;
+    /** Bindable handle to the underlying <input> element. Lets the
+     *  parent wire keyboard-shortcut focus (`/` from anywhere). */
+    inputEl?: HTMLInputElement | null;
     matchCount?: number; // optional live preview ("→ N issues match")
     sparkline?: number[]; // optional 60-bucket density of matches
     placeholder?: string;
@@ -26,6 +29,7 @@
 
   let {
     value = $bindable(''),
+    inputEl = $bindable(null),
     matchCount,
     sparkline,
     placeholder = 'filter…',
@@ -39,7 +43,6 @@
   // ─── Local state ─────────────────────────────────────────────────────
   let cursor = $state(value.length);
   let focused = $state(false);
-  let inputEl: HTMLInputElement | undefined = $state();
   let overlay: HTMLElement | undefined = $state();
 
   const tokens = $derived(tokenize(value));
