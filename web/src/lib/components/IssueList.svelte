@@ -195,18 +195,18 @@
 
   <div class="flex-1 overflow-y-auto">
     {#if load.initialLoad}
+      <!-- Skeleton mirrors the 50px grid row template so layout doesn't
+           pop in. Layout: 2-row CSS grid matching IssueRow. -->
       <ul class="flex flex-col gap-0">
         {#each Array.from({ length: 6 }) as _, i (i)}
-          <li class="border-b border-border/50 px-5 py-4">
-            <div class="flex items-center gap-4">
-              <Skeleton class="h-2.5 w-2.5 rounded-full" />
-              <Skeleton class="h-5 w-11" />
-              <div class="flex flex-1 flex-col gap-2">
-                <Skeleton class="h-3.5 w-3/4" />
-                <Skeleton class="h-3 w-1/2" />
-              </div>
-              <Skeleton class="h-4 w-12" />
-            </div>
+          <li
+            class="grid h-16 items-center gap-x-4 border-b border-border/40 px-5 grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[1fr_1fr]"
+          >
+            <Skeleton class="col-start-1 row-start-1 h-6 w-9 self-end rounded-md" />
+            <Skeleton class="col-start-1 row-start-2 h-2.5 w-6 self-start justify-self-end" />
+            <Skeleton class="col-start-2 row-start-1 h-3 w-3/4 self-end" />
+            <Skeleton class="col-start-2 row-start-2 h-2.5 w-1/2 self-start" />
+            <Skeleton class="col-start-3 row-span-2 h-4 w-20 self-center justify-self-end" />
           </li>
         {/each}
       </ul>
@@ -233,6 +233,11 @@
         <p class="text-[12px]">No open issues in this project.</p>
       </div>
     {:else}
+      <!-- Flat list, sorted by the active sort dimension. Recency lives on
+           each row's timestamp ("11h", "2d", "7d") so the bucket headers
+           ("today", "yesterday") were doing redundant work and locking the
+           sort order to recency-desc. Removing them means the sort the user
+           picked actually drives the list end-to-end. -->
       {#each visible as issue (issue.id)}
         <IssueRow {issue} selected={issue.id === selection.issueId} {onSelect} />
       {/each}

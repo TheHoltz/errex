@@ -3,7 +3,7 @@
 // rest of the suite.
 
 import { describe, expect, it } from 'vitest';
-import { cn, relativeTime, shortFingerprint } from './utils';
+import { cn, countTier, midTruncatePath, relativeTime, shortFingerprint } from './utils';
 
 describe('cn', () => {
   it('joins truthy class names', () => {
@@ -26,6 +26,47 @@ describe('shortFingerprint', () => {
 
   it('leaves short fingerprints alone', () => {
     expect(shortFingerprint('abc123')).toBe('abc123');
+  });
+});
+
+describe('midTruncatePath', () => {
+  it('returns the input unchanged when shorter than max', () => {
+    expect(midTruncatePath('/short/path.js', 32)).toBe('/short/path.js');
+  });
+
+  it('preserves the trailing segment when truncating', () => {
+    const out = midTruncatePath('/a/b/c/d/e/long/long/long/bundle-abc123.js', 32);
+    expect(out.endsWith('/bundle-abc123.js')).toBe(true);
+    expect(out).toContain('…');
+    expect(out.length).toBeLessThanOrEqual(32);
+  });
+
+  it('handles paths with no separator by truncating from the left', () => {
+    expect(midTruncatePath('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.js', 16)).toMatch(/^…/);
+  });
+
+  it('handles backslash separators (Windows)', () => {
+    const out = midTruncatePath('C\\very\\long\\folder\\bundle.js', 20);
+    expect(out.endsWith('\\bundle.js')).toBe(true);
+  });
+});
+
+describe('countTier', () => {
+  it('returns "low" below 10', () => {
+    expect(countTier(0)).toBe('low');
+    expect(countTier(1)).toBe('low');
+    expect(countTier(9)).toBe('low');
+  });
+
+  it('returns "mid" from 10 through 99', () => {
+    expect(countTier(10)).toBe('mid');
+    expect(countTier(50)).toBe('mid');
+    expect(countTier(99)).toBe('mid');
+  });
+
+  it('returns "high" at 100 and above', () => {
+    expect(countTier(100)).toBe('high');
+    expect(countTier(1000)).toBe('high');
   });
 });
 
