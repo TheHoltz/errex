@@ -17,6 +17,17 @@ export interface Issue {
   event_count: number;
   first_seen: string;
   last_seen: string;
+  /**
+   * Optional, server-supplied. `'txn'` means a Sentry transaction (perf
+   * span) rather than an error event — the row template renders a `›`
+   * glyph instead of a level dot. Absent today; reserved for a future
+   * `errex-proto` bump so the UI is forward-compatible.
+   */
+  kind?: 'error' | 'txn';
+  /** Distinct affected users in the active window. Optional. */
+  user_count?: number;
+  /** Set by the daemon when an issue re-fired after being resolved. */
+  regressed?: boolean;
 }
 
 export interface ProjectSummary {
