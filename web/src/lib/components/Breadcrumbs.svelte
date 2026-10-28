@@ -2,7 +2,7 @@
   import { Footprints } from 'lucide-svelte';
   import { Badge } from '$lib/components/ui/badge';
   import { Collapsible } from '$lib/components/ui/collapsible';
-  import { breadcrumbRelativeTime, parseSentryTimestamp } from '$lib/eventDetail';
+  import { breadcrumbLabel, breadcrumbRelativeTime, parseSentryTimestamp } from '$lib/eventDetail';
   import type { Breadcrumb } from '$lib/types';
   import { cn } from '$lib/utils';
 
@@ -86,7 +86,7 @@
             <Badge variant={levelVariant(bc.level ?? null)} class="shrink-0">
               {bc.category ?? 'event'}
             </Badge>
-            <span class="min-w-0 flex-1 break-words text-[12px]">{bc.message ?? ''}</span>
+            <span class="min-w-0 flex-1 break-words text-[12px]">{breadcrumbLabel(bc)}</span>
           </li>
         {/each}
       </ol>

@@ -1,11 +1,73 @@
 import { describe, expect, it } from 'vitest';
 import {
+  breadcrumbLabel,
   breadcrumbRelativeTime,
   dedupTags,
+  normalize,
   partitionFrames,
   throwSiteIndex
 } from './eventDetail';
-import type { Frame } from './types';
+import type { Frame, StoredEvent } from './types';
+
+function stored(payload: StoredEvent['payload']): StoredEvent {
+  return { event_id: 'e1', received_at: '2026-10-28T00:00:00Z', payload };
+}
+
+describe('normalize: tags from contexts', () => {
+  // Sentry's server promotes contexts to tags; SDKs that only send
+  // contexts (React Native without the native layer, for one) would
+  // otherwise show no device or OS at all.
+  it('derives os, device and runtime tags from contexts', () => {
+    const ev = normalize(
+      stored({
+        contexts: {
+          os: { name: 'Android', version: '16' },
+          device: { brand: 'Google', model: 'Pixel 9' },
+          runtime: { name: 'hermes', version: '0.12' }
+        }
+      })
+    );
+    expect(ev.tags).toEqual({
+      os: 'Android 16',
+      'os.name': 'Android',
+      device: 'Pixel 9',
+      'device.brand': 'Google',
+      runtime: 'hermes 0.12'
+    });
+  });
+
+  it('keeps the tags the SDK sent over the derived ones', () => {
+    const ev = normalize(
+      stored({ contexts: { os: { name: 'Android', version: '16' } }, tags: { os: 'Android 16 (QPR1)' } })
+    );
+    expect(ev.tags.os).toBe('Android 16 (QPR1)');
+  });
+
+  it('ignores non-scalar and missing context fields', () => {
+    const ev = normalize(stored({ contexts: { os: { name: { nested: true } }, device: null } }));
+    expect(ev.tags).toEqual({});
+  });
+});
+
+describe('breadcrumbLabel', () => {
+  it('prefers the message', () => {
+    expect(breadcrumbLabel({ category: 'navigation', message: 'home' })).toBe('home');
+  });
+
+  it('describes an http breadcrumb by method, path and status', () => {
+    expect(
+      breadcrumbLabel({
+        type: 'http',
+        category: 'xhr',
+        data: { method: 'GET', url: 'https://api.example.com/usage?x=1', status_code: 200 }
+      })
+    ).toBe('GET /usage 200');
+  });
+
+  it('is empty when there is nothing to show', () => {
+    expect(breadcrumbLabel({ category: 'xhr' })).toBe('');
+  });
+});
 
 describe('dedupTags', () => {
   it('drops `x.name` when `x` is also present', () => {

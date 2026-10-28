@@ -87,6 +87,8 @@ export interface Breadcrumb {
   level?: IssueLevel | null;
   message?: string | null;
   type?: string | null;
+  /** `http` breadcrumbs carry method, url and status_code here, not in `message`. */
+  data?: Record<string, unknown> | null;
 }
 
 /** Sentry's envelope-event payload, as preserved by errexd. */
@@ -102,6 +104,7 @@ export interface EventPayload {
   exception?: { values?: ExceptionInfo[] } | null;
   breadcrumbs?: { values?: Breadcrumb[] } | Breadcrumb[] | null;
   tags?: Record<string, string> | Array<[string, string]> | null;
+  contexts?: Record<string, Record<string, unknown> | null> | null;
 }
 
 /** What `/api/issues/:id/event` returns. */

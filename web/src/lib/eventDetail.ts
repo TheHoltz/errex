@@ -23,7 +23,7 @@ export function normalize(stored: StoredEvent): NormalizedEvent {
     environment: p.environment ?? null,
     exception: extractStack(p),
     breadcrumbs: extractBreadcrumbs(p),
-    tags: extractTags(p),
+    tags: { ...tagsFromContexts(p), ...extractTags(p) },
     raw: stored
   };
 }
@@ -61,6 +61,43 @@ function extractTags(p: EventPayload): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(t)) out[k] = String(v);
   return out;
+}
+
+/**
+ * The tags Sentry's server would promote from `contexts`. SDKs that only
+ * send contexts (React Native without its native layer, for one) would
+ * otherwise show no OS or device at all. Tags the SDK sent win over these.
+ */
+function tagsFromContexts(p: EventPayload): Record<string, string> {
+  const out: Record<string, string> = {};
+  const field = (ctx: string, key: string): string | null => {
+    const v = p.contexts?.[ctx]?.[key];
+    return typeof v === 'string' || typeof v === 'number' ? String(v) : null;
+  };
+  const nameAndVersion = (ctx: string) =>
+    [field(ctx, 'name'), field(ctx, 'version')].filter((x) => x !== null).join(' ');
+  const os = nameAndVersion('os');
+  if (os) out.os = os;
+  const osName = field('os', 'name');
+  if (osName) out['os.name'] = osName;
+  const model = field('device', 'model');
+  if (model) out.device = model;
+  const brand = field('device', 'brand');
+  if (brand) out['device.brand'] = brand;
+  const runtime = nameAndVersion('runtime');
+  if (runtime) out.runtime = runtime;
+  return out;
+}
+
+/** What a breadcrumb row shows: its message, or method, path and status for `http`. */
+export function breadcrumbLabel(bc: Breadcrumb): string {
+  if (bc.message) return bc.message;
+  const d = bc.data;
+  if (!d) return '';
+  const url = typeof d.url === 'string' ? d.url.replace(/^[a-z]+:\/\/[^/]+/i, '').split(/[?#]/)[0] : '';
+  return [d.method, url, d.status_code]
+    .filter((x) => (typeof x === 'string' && x !== '') || typeof x === 'number')
+    .join(' ');
 }
 
 /**
