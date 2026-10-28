@@ -147,7 +147,11 @@ dsn:        https://3f4a9b8e2c1d4f5e8a7b6c5d4e3f2a1b@errex.example.com/my-app
 ingest_url: https://errex.example.com/api/my-app/envelope/?sentry_key=3f4a...
 ```
 
-The `dsn` is the canonical Sentry shape — every official SDK parses it.
+The `dsn` is the canonical Sentry shape. The JavaScript SDKs
+(`@sentry/browser`, `@sentry/node`, `@sentry/react-native`…) accept only a
+numeric project segment and silently disable themselves otherwise; with
+`ERREX_REQUIRE_AUTH=true`, put any number there
+(`https://3f4a...@errex.example.com/1`) — the token picks the project.
 The `ingest_url` is for hand-testing with curl; the SDK derives it
 internally from the DSN.
 
@@ -165,7 +169,8 @@ JavaScript / TypeScript:
 ```js
 import * as Sentry from '@sentry/browser';
 Sentry.init({
-  dsn: 'https://3f4a...@errex.example.com/my-app'
+  // Numeric segment: the JS SDKs reject `/my-app` (see above).
+  dsn: 'https://3f4a...@errex.example.com/1'
 });
 ```
 

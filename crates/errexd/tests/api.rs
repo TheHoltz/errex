@@ -694,6 +694,52 @@ async fn ingest_with_auth_required_rejects_token_for_wrong_project() {
 }
 
 #[tokio::test]
+async fn ingest_with_auth_required_accepts_numeric_project_id_and_files_under_token_project() {
+    // Sentry SDKs refuse a DSN whose project segment is not all digits
+    // (@sentry/core: `Invalid Sentry Dsn: Invalid projectId`), so a DSN
+    // ending in `/my-app` leaves the SDK silently disabled. The token
+    // already identifies the project; a numeric segment defers to it.
+    let (router, store, _dir) = fixture_with_auth(true).await;
+    let p = store.create_project("my-app").await.unwrap();
+    let res = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/1/envelope/")
+                .header("x-sentry-auth", format!("Sentry sentry_key={}", p.token))
+                .body(sample_envelope_body())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let after = store.project_by_name("my-app").await.unwrap().unwrap();
+    assert!(
+        after.last_used_at.is_some(),
+        "the event must be filed under the token's project, not under `1`",
+    );
+    assert!(store.project_by_name("1").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn ingest_with_auth_required_rejects_numeric_project_id_with_unknown_token() {
+    let (router, store, _dir) = fixture_with_auth(true).await;
+    store.create_project("my-app").await.unwrap();
+    let res = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/1/envelope/")
+                .header("x-sentry-auth", "Sentry sentry_key=anything")
+                .body(sample_envelope_body())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn ingest_with_auth_required_rejects_unknown_project() {
     let (router, _store, _dir) = fixture_with_auth(true).await;
     let res = router

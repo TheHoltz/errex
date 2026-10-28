@@ -1012,13 +1012,17 @@ async fn ingest_envelope(
     uri: axum::http::Uri,
     body: Bytes,
 ) -> impl IntoResponse {
-    if state.require_auth {
+    let project = if state.require_auth {
         let key = extract_sentry_key(&headers, uri.query().unwrap_or(""));
         let Some(key) = key else {
             return (StatusCode::UNAUTHORIZED, "missing sentry_key").into_response();
         };
         match state.store.project_by_token(&key).await {
-            Ok(Some(p)) if p.name == project => {}
+            // Sentry SDKs reject a DSN whose project segment isn't all
+            // digits, so a numeric segment defers to the token's project.
+            Ok(Some(p)) if p.name == project || project.bytes().all(|b| b.is_ascii_digit()) => {
+                p.name
+            }
             Ok(_) => {
                 return (StatusCode::UNAUTHORIZED, "invalid sentry_key for project")
                     .into_response();
@@ -1028,7 +1032,9 @@ async fn ingest_envelope(
                 return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
             }
         }
-    }
+    } else {
+        project
+    };
 
     // Rate limit AFTER auth so unauthenticated traffic doesn't fill the
     // limiter map and DoS legitimate projects.
